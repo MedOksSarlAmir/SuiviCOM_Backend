@@ -1,0 +1,1 @@
+from .inventory_sync import update_stock_incremental
