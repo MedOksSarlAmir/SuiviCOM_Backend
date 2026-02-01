@@ -21,3 +21,18 @@ def vendors(dist_id):
 @jwt_required()
 def products():
     return supervisor_controller.get_products()
+
+
+# --- NEW FILTER ENDPOINTS ---
+
+
+@supervisor_bp.route("/categories-with-formats", methods=["GET"])
+@jwt_required()
+def categories_with_formats():
+    return supervisor_controller.get_categories_with_formats()
+
+
+@supervisor_bp.route("/types", methods=["GET"])
+@jwt_required()
+def types():
+    return supervisor_controller.get_product_types()

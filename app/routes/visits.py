@@ -27,3 +27,14 @@ def update(id):
 @jwt_required()
 def destroy(id):
     return visits_controller.delete_visit(id)
+
+
+@visits_bp.route("/matrix", methods=["GET"])
+@jwt_required()
+def matrix():
+    return visits_controller.get_visit_matrix()
+
+@visits_bp.route("/upsert", methods=["POST"])
+@jwt_required()
+def upsert():
+    return visits_controller.upsert_visit()

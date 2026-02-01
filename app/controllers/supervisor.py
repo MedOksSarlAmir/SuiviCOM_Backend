@@ -2,6 +2,7 @@ from flask import jsonify
 from flask_jwt_extended import get_jwt_identity
 from app.extensions import db
 from app.models import Distributor, Vendor, Product, User, ProductView, DistributorView
+from app.models.supervisor import ProductCategory, ProductType
 
 
 def get_distributors():
@@ -66,3 +67,36 @@ def get_vendors_by_distributor(dist_id):
         ),
         200,
     )
+
+
+def get_product_types():
+    types = ProductType.query.all()
+    return jsonify([{"id": t.id, "name": t.name} for t in types]), 200
+
+
+def get_categories_with_formats():
+    """
+    Returns a hierarchical list of categories and the distinct formats
+    available specifically within each category.
+    """
+    # Query categories and their related product formats in one go
+    # Using a join to ensure we only get categories that actually have products
+    query_data = (
+        db.session.query(ProductCategory.id, ProductCategory.name, Product.format)
+        .join(Product, Product.category_id == ProductCategory.id)
+        .filter(Product.active == True)
+        .distinct()
+        .all()
+    )
+
+    # Structure the data: { cat_id: { id, name, formats: [] } }
+    structured = {}
+    for cat_id, cat_name, p_format in query_data:
+        if cat_id not in structured:
+            structured[cat_id] = {"id": cat_id, "name": cat_name, "formats": []}
+        if p_format and p_format not in structured[cat_id]["formats"]:
+            structured[cat_id]["formats"].append(p_format)
+
+    # Sort categories by name
+    result = sorted(list(structured.values()), key=lambda x: x["name"])
+    return jsonify(result), 200
