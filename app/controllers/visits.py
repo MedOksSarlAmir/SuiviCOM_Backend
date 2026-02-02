@@ -171,7 +171,7 @@ def get_visit_matrix():
     
     if search:
         vendor_query = vendor_query.filter(
-            or_(Vendor.nom.ilike(f"%{search}%"), Vendor.prenom.ilike(f"%{search}%"))
+            or_(Vendor.nom.ilike(f"%{search}%"), Vendor.prenom.ilike(f"%{search}%"), Vendor.code.ilike(f"%{search}%"))
         )
     if v_type != "all":
         vendor_query = vendor_query.filter_by(vendor_type=v_type)

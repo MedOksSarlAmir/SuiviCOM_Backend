@@ -1,7 +1,7 @@
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from app.extensions import db
-from app.models import Vendor, Sale, User
+from app.models import Vendor, Sale, User, Visit
 from sqlalchemy import or_
 
 
@@ -108,15 +108,25 @@ def update_vendor(id):
 def delete_vendor(id):
     vendor = Vendor.query.get_or_404(id)
 
-    # Logic: Check if the vendor is "free"
-    # In your schema, vendors are linked to Sales. Purchases are linked to Distributors.
-    sales_linked = Sale.query.filter_by(vendor_id=id).first()
+    # Check if the vendor has any related records
+    sales_count = Sale.query.filter_by(vendor_id=id).count()
+    visits_count = Visit.query.filter_by(vendor_id=id).count()
 
-    if sales_linked:
+    if sales_count > 0 or visits_count > 0:
+        reasons = []
+        if sales_count > 0:
+            reasons.append(f"{sales_count} vente(s) enregistrée(s)")
+        if visits_count > 0:
+            reasons.append(f"{visits_count} visite(s) programmée(s)")
+
         return (
             jsonify(
                 {
-                    "message": "Impossible de supprimer: ce vendeur a des ventes enregistrées. Désactivez-le plutôt."
+                    "message": (
+                        f"Impossible de supprimer ce vendeur: " +
+                        ", ".join(reasons) +
+                        ". Veuillez le désactiver à la place."
+                    )
                 }
             ),
             400,
@@ -125,7 +135,7 @@ def delete_vendor(id):
     try:
         db.session.delete(vendor)
         db.session.commit()
-        return jsonify({"message": "Vendeur supprimé"}), 200
+        return jsonify({"message": "Vendeur supprimé avec succès"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
