@@ -259,7 +259,7 @@ from app.utils.inventory_sync import update_stock_incremental
 def get_weekly_sales_matrix():
     """
     Centerpiece of the Excel-like entry.
-    Returns a list of products with a 6-day quantity array and status map.
+    Returns a list of products with a 6-day quantity array, status map, and contextual price.
     """
     # 1. Retrieve and Normalize Params
     start_date_str = request.args.get("start_date")
@@ -271,6 +271,10 @@ def get_weekly_sales_matrix():
             jsonify({"message": "Paramètres manquants (Vendeur, Distributeur, Date)"}),
             400,
         )
+
+    # --- ADDED: Fetch Vendor to get the type for pricing context ---
+    vendor = Vendor.query.get_or_404(v_id)
+    v_type = vendor.vendor_type  # 'gros', 'superette', or 'detail'
 
     # Normalization: Always snap the week to the preceding Saturday
     raw_date = datetime.fromisoformat(start_date_str).date()
@@ -313,7 +317,7 @@ def get_weekly_sales_matrix():
         page=page, per_page=25
     )
 
-    # 3. Fetch Existing Sales & Statuses for this specific week/vendor
+    # 3. Fetch Existing Sales & Statuses
     sales = Sale.query.filter(
         Sale.vendor_id == v_id, Sale.date >= start_date, Sale.date <= end_date
     ).all()
@@ -322,7 +326,6 @@ def get_weekly_sales_matrix():
     sale_ids = [s.id for s in sales]
     date_map = {s.id: s.date for s in sales}
 
-    # Build item_map: {(product_id, date): quantity}
     item_map = {}
     if sale_ids:
         items = SaleItem.query.filter(SaleItem.sale_id.in_(sale_ids)).all()
@@ -333,7 +336,14 @@ def get_weekly_sales_matrix():
     # 4. Construct Result Matrix
     data = []
     for p in pagination.items:
-        # Construct the 6-day array for this product
+        # --- ADDED: Pricing Logic based on Vendor Type ---
+        if v_type == 'gros':
+            unit_price = p.price_gros
+        elif v_type == 'superette':
+            unit_price = p.price_superette
+        else:
+            unit_price = p.price_detail
+
         day_values = [item_map.get((p.id, d), 0) for d in week_dates]
 
         data.append(
@@ -342,6 +352,7 @@ def get_weekly_sales_matrix():
                 "designation": p.designation,
                 "code": p.code,
                 "active": p.active,
+                "price": float(unit_price or 0), # Added price here
                 "days": day_values,
             }
         )
@@ -357,20 +368,52 @@ def get_weekly_sales_matrix():
         ),
         200,
     )
+    
+    
+from decimal import Decimal
+
+
+def recalculate_sale_total(sale):
+    """
+    Helper function to refresh the montant_total of a sale based on
+    the current vendor type and the quantities of all items.
+    """
+    total = Decimal("0.00")
+    # Determine which price column to use
+    vendor_type = sale.vendor.vendor_type if sale.vendor else "detail"
+
+    # We need to ensure we have the latest items from the session
+    for item in sale.items:
+        prod = item.product
+        if not prod:
+            continue
+
+        # Select price based on vendor category
+        if vendor_type == "gros":
+            price = prod.price_gros
+        elif vendor_type == "superette":
+            price = prod.price_superette
+        else:
+            price = prod.price_detail
+
+        total += Decimal(str(price or 0)) * item.quantity
+
+    sale.montant_total = total
 
 
 def upsert_sale_item():
     """
     Handles 'Save on Blur'. Updates or creates a sale record for a specific cell.
+    Includes automatic stock sync and total amount recalculation.
     """
     uid = get_jwt_identity()
     data = request.json
 
-    v_id = data["vendor_id"]
-    d_id = data["distributor_id"]
-    p_id = data["product_id"]
-    target_date = data["date"]
-    qty = int(data["quantity"])
+    v_id = data.get("vendor_id")
+    d_id = data.get("distributor_id")
+    p_id = data.get("product_id")
+    target_date = data.get("date")
+    qty = int(data.get("quantity", 0))
 
     try:
         # 1. Get or Create the Sale Header
@@ -381,32 +424,41 @@ def upsert_sale_item():
                 distributor_id=d_id,
                 vendor_id=v_id,
                 supervisor_id=uid,
-                status="complete",  # Matrix entries default to validated
+                status="complete",  # Default for matrix
+                montant_total=0,
             )
             db.session.add(sale)
-            db.session.flush()  # Get sale.id
+            db.session.flush()  # Flush to get IDs and establish relationships
 
-        # 2. Get or Create the Sale Item
+        # 2. Update the specific SaleItem
         item = SaleItem.query.filter_by(sale_id=sale.id, product_id=p_id).first()
         old_qty = item.quantity if item else 0
 
-        if qty <= 0 and item:
-            db.session.delete(item)
-        elif qty > 0:
+        if qty <= 0:
+            if item:
+                db.session.delete(item)
+        else:
             if not item:
                 item = SaleItem(sale_id=sale.id, product_id=p_id, quantity=qty)
                 db.session.add(item)
             else:
                 item.quantity = qty
 
-        # 3. Inventory Reconciliation (Only if sale is complete)
+        # 3. Stock Sync (Only if status is complete)
         if sale.status == "complete":
-            # Delta logic: if old=5, new=10, we subtract 5 more. if old=10, new=2, we add back 8.
+            # Delta logic: old=10, new=12 -> delta is -2 (remove 2 more from stock)
+            # old=10, new=2 -> delta is +8 (add 8 back to stock)
             delta = old_qty - qty
             update_stock_incremental(d_id, p_id, delta)
 
+        # 4. RECALCULATE TOTAL
+        # We flush again to make sure deleted items are gone/updated items are ready
+        db.session.flush()
+        recalculate_sale_total(sale)
+
         db.session.commit()
-        return jsonify({"success": True}), 200
+        return jsonify({"success": True, "new_total": float(sale.montant_total)}), 200
+
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
