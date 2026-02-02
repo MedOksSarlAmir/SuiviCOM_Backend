@@ -4,6 +4,8 @@ from sqlalchemy import or_, and_
 from datetime import datetime
 from app.extensions import db
 from app.models import Visit, VisitView, User, Vendor
+from app.models import Distributor
+
 
 def get_visits():
     user_id = get_jwt_identity()
@@ -131,39 +133,64 @@ def delete_visit(visit_id):
         return jsonify({"message": str(e)}), 500
 
 
-
 def get_visit_matrix():
     uid = get_jwt_identity()
-    dist_id = request.args.get("distributor_id")
-    target_date = request.args.get("date") # Expected YYYY-MM-DD
+    user = User.query.get(uid)
     
-    if not dist_id or not target_date:
-        return jsonify({"message": "Distributeur et Date requis"}), 400
+    dist_id = request.args.get("distributor_id", type=int)
+    target_date = request.args.get("date")
+    
+    if not target_date:
+        return jsonify({"message": "Date requise"}), 400
 
-    # Filters
+    # 1. SCOPING: Verify if this supervisor is allowed to see this distributor
+    if user and user.role == "superviseur":
+        assigned_distributors = Distributor.query.filter_by(supervisor_id=uid).all()
+        assigned_ids = [d.id for d in assigned_distributors]
+        
+        if not assigned_ids:
+            return jsonify({"data": [], "total": 0, "message": "Aucun distributeur assigné"}), 200
+
+        if not dist_id:
+            dist_id = assigned_ids[0]
+        
+        if dist_id not in assigned_ids:
+            return jsonify({"message": "Accès non autorisé"}), 403
+
+    # 2. FILTERS
     search = request.args.get("search", "")
     v_type = request.args.get("vendor_type", "all")
     page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("pageSize", 20, type=int)
+    # Increase default pageSize for matrix entry to 50 so "all" usually show
+    per_page = request.args.get("pageSize", 50, type=int) 
 
-    # 1. Get Vendors Query
+    # 3. QUERY VENDORS 
+    # We filter by distributor_id. 
+    # Note: We include active=True because you usually don't report visits for fired/inactive vendors.
     vendor_query = Vendor.query.filter_by(distributor_id=dist_id, active=True)
+    
     if search:
-        vendor_query = vendor_query.filter(Vendor.nom.ilike(f"%{search}%"))
+        vendor_query = vendor_query.filter(
+            or_(Vendor.nom.ilike(f"%{search}%"), Vendor.prenom.ilike(f"%{search}%"))
+        )
     if v_type != "all":
         vendor_query = vendor_query.filter_by(vendor_type=v_type)
 
+    # MSSQL FIX: Order by name
+    vendor_query = vendor_query.order_by(Vendor.nom.asc()) 
+
     pagination = vendor_query.paginate(page=page, per_page=per_page)
 
-    # 2. Get existing Visit data for these vendors on this date
+    # 4. Get existing Visit data for these vendors on this date
     vendor_ids = [v.id for v in pagination.items]
+    
     existing_visits = Visit.query.filter(
         and_(Visit.date == target_date, Visit.vendor_id.in_(vendor_ids))
     ).all()
     
     visit_map = {v.vendor_id: v for v in existing_visits}
 
-    # 3. Build Matrix
+    # 5. Build Result
     data = []
     for v in pagination.items:
         visit = visit_map.get(v.id)
@@ -172,19 +199,25 @@ def get_visit_matrix():
             "vendor_name": f"{v.nom} {v.prenom}",
             "vendor_code": v.code,
             "vendor_type": v.vendor_type,
+            # If no visit record exists yet, the matrix shows 0s ready to be filled
             "prog": visit.visites_programmees if visit else 0,
             "done": visit.visites_effectuees if visit else 0,
             "invoices": visit.nb_factures if visit else 0,
-            "visit_id": visit.id if visit else None
+            "visit_id": visit.id if visit else None,
+            "status": visit.status if visit else "non effectuée"
         })
 
     return jsonify({
         "data": data,
-        "total": pagination.total
+        "total": pagination.total,
+        "current_distributor": dist_id
     }), 200
+
+
 
 def upsert_visit():
     uid = get_jwt_identity()
+    user = User.query.get(uid)
     data = request.json # { vendor_id, date, field, value }
     
     v_id = data.get("vendor_id")
@@ -192,24 +225,45 @@ def upsert_visit():
     field = data.get("field") # 'prog', 'done', or 'invoices'
     val = int(data.get("value", 0))
 
-    # Find existing or create
+    # 1. Fetch Vendor and verify permission
+    vendor = Vendor.query.get_or_404(v_id)
+    
+    if user.role == "superviseur":
+        if vendor.supervisor_id != int(uid):
+            return jsonify({"message": "Action non autorisée"}), 403
+
+    # 2. Find existing or create
     visit = Visit.query.filter_by(vendor_id=v_id, date=target_date).first()
     
     if not visit:
-        # Need distributor_id to create
-        vendor = Vendor.query.get(v_id)
         visit = Visit(
             date=target_date,
             vendor_id=v_id,
             distributor_id=vendor.distributor_id,
             supervisor_id=uid,
-            status="effectuée" if field == "done" and val > 0 else "programmées/non effectuée"
+            # FIX 1: Explicitly initialize all numeric fields to 0
+            visites_programmees=0,
+            visites_effectuees=0,
+            nb_factures=0,
+            status="programmées/non effectuée"
         )
         db.session.add(visit)
 
-    if field == "prog": visit.visites_programmees = val
-    elif field == "done": visit.visites_effectuees = val
-    elif field == "invoices": visit.nb_factures = val
+    # 3. Update the specific field
+    if field == "prog": 
+        visit.visites_programmees = val
+    elif field == "done": 
+        visit.visites_effectuees = val
+    elif field == "invoices": 
+        visit.nb_factures = val
+
+    # 4. Update Status Logic
+    # FIX 2: Use (visit.visites_effectuees or 0) to prevent NoneType errors
+    if (visit.visites_effectuees or 0) > 0:
+        visit.status = "effectuée"
+    else:
+        # Optional: reset to programmed if they accidentally entered a number then cleared it
+        visit.status = "programmées/non effectuée"
 
     try:
         db.session.commit()
