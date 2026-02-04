@@ -6,6 +6,7 @@ from app.models import (
     Distributor,
     User,
     Product,
+    ProductCategory,
     StockAdjustment,
 )
 from app.extensions import db
@@ -37,17 +38,20 @@ def get_inventory(dist_id):
     if not dist_id:
         return jsonify({"data": [], "message": "Aucun distributeur sélectionné"}), 200
 
-    query = db.session.query(Inventory).filter_by(distributor_id=dist_id)
+    # Join with Product and Category to allow searching and display
+    query = db.session.query(Inventory).join(Product).join(ProductCategory)
+
+    query = query.filter(Inventory.distributor_id == dist_id)
 
     if search:
-        query = query.join(Product).filter(
+        query = query.filter(
             or_(
                 Product.designation.ilike(f"%{search}%"),
                 Product.code.ilike(f"%{search}%"),
             )
         )
 
-    query = query.join(Product).order_by(Product.designation.asc())
+    query = query.order_by(Product.designation.asc())
 
     page = request.args.get("page", 1, type=int)
     page_size = request.args.get("pageSize", 20, type=int)
@@ -62,6 +66,9 @@ def get_inventory(dist_id):
                         "product_id": i.product_id,
                         "code": i.product.code,
                         "designation": i.product.designation,
+                        "category": (
+                            i.product.category.name if i.product.category else "N/A"
+                        ),
                         "stock": i.stock_qte,
                         "last_updated": (
                             i.last_updated.isoformat() if i.last_updated else None

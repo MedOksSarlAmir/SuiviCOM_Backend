@@ -286,7 +286,7 @@ class Visit(db.Model):
     visites_effectuees = db.Column(db.Integer, default=0)
     nb_factures = db.Column(db.Integer, default=0)
 
-    status = db.Column(db.String(50), default="programmées/non effectuée")
+    status = db.Column(db.String(50), default=None)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -299,7 +299,6 @@ class VisitView(db.Model):
     __tablename__ = "vw_visits_list"
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date)
-    status = db.Column(db.String)
     visites_programmees = db.Column(db.Integer)
     visites_effectuees = db.Column(db.Integer)
     nb_factures = db.Column(db.Integer)

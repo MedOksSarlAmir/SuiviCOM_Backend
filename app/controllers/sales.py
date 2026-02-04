@@ -1,7 +1,7 @@
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from sqlalchemy.orm import joinedload
-from sqlalchemy import or_
+from sqlalchemy import or_, and_
 from datetime import datetime, timedelta
 from decimal import Decimal
 from app.extensions import db
@@ -245,21 +245,11 @@ def delete_sale(sale_id):
         return jsonify({"message": str(e)}), 500
 
 
-from flask import request, jsonify
-from flask_jwt_extended import get_jwt_identity
-from sqlalchemy.orm import joinedload
-from sqlalchemy import or_, and_
-from datetime import datetime, timedelta
-from decimal import Decimal
-from app.extensions import db
-from app.models import Sale, SaleItem, User, Product, SaleView, Vendor
-from app.utils.inventory_sync import update_stock_incremental
-
-
 def get_weekly_sales_matrix():
     """
     Centerpiece of the Excel-like entry.
     Returns a list of products with a 6-day quantity array, status map, and contextual price.
+    Floats products with existing data to the top.
     """
     # 1. Retrieve and Normalize Params
     start_date_str = request.args.get("start_date")
@@ -272,9 +262,9 @@ def get_weekly_sales_matrix():
             400,
         )
 
-    # --- ADDED: Fetch Vendor to get the type for pricing context ---
+    # Fetch Vendor to get the type for pricing context
     vendor = Vendor.query.get_or_404(v_id)
-    v_type = vendor.vendor_type  # 'gros', 'superette', or 'detail'
+    v_type = vendor.vendor_type
 
     # Normalization: Always snap the week to the preceding Saturday
     raw_date = datetime.fromisoformat(start_date_str).date()
@@ -290,7 +280,23 @@ def get_weekly_sales_matrix():
     week_dates = [start_date + timedelta(days=i) for i in range(6)]  # Sat to Thu
     end_date = week_dates[-1]
 
-    # 2. Product Query with Matrix Filters
+    # 2. Identify Products already in use for this specific week/vendor to float them to the top
+    sales = Sale.query.filter(
+        Sale.vendor_id == v_id, Sale.date >= start_date, Sale.date <= end_date
+    ).all()
+    sale_ids = [s.id for s in sales]
+
+    involved_product_ids = []
+    if sale_ids:
+        involved_items = (
+            db.session.query(SaleItem.product_id)
+            .filter(SaleItem.sale_id.in_(sale_ids))
+            .distinct()
+            .all()
+        )
+        involved_product_ids = [p[0] for p in involved_items]
+
+    # 3. Product Query with Matrix Filters
     search = request.args.get("search", "")
     cat = request.args.get("category", "all")
     p_type = request.args.get("product_type", "all")
@@ -312,18 +318,16 @@ def get_weekly_sales_matrix():
             )
         )
 
-    # MSSQL pagination requires order_by
-    pagination = prod_query.order_by(Product.designation.asc()).paginate(
-        page=page, per_page=25
+    # Sorting Logic: Floats products with existing entries to the top
+    prod_query = prod_query.order_by(
+        db.case((Product.id.in_(involved_product_ids), 0), else_=1),
+        Product.designation.asc(),
     )
 
-    # 3. Fetch Existing Sales & Statuses
-    sales = Sale.query.filter(
-        Sale.vendor_id == v_id, Sale.date >= start_date, Sale.date <= end_date
-    ).all()
+    pagination = prod_query.paginate(page=page, per_page=25)
 
+    # 4. Map statuses and quantities
     status_map = {s.date.isoformat(): s.status for s in sales}
-    sale_ids = [s.id for s in sales]
     date_map = {s.id: s.date for s in sales}
 
     item_map = {}
@@ -333,13 +337,12 @@ def get_weekly_sales_matrix():
             itm_date = date_map.get(itm.sale_id)
             item_map[(itm.product_id, itm_date)] = itm.quantity
 
-    # 4. Construct Result Matrix
+    # 5. Construct Result Matrix
     data = []
     for p in pagination.items:
-        # --- ADDED: Pricing Logic based on Vendor Type ---
-        if v_type == 'gros':
+        if v_type == "gros":
             unit_price = p.price_gros
-        elif v_type == 'superette':
+        elif v_type == "superette":
             unit_price = p.price_superette
         else:
             unit_price = p.price_detail
@@ -352,7 +355,7 @@ def get_weekly_sales_matrix():
                 "designation": p.designation,
                 "code": p.code,
                 "active": p.active,
-                "price": float(unit_price or 0), # Added price here
+                "price": float(unit_price or 0),
                 "days": day_values,
             }
         )
@@ -368,9 +371,6 @@ def get_weekly_sales_matrix():
         ),
         200,
     )
-    
-    
-from decimal import Decimal
 
 
 def recalculate_sale_total(sale):
@@ -379,16 +379,13 @@ def recalculate_sale_total(sale):
     the current vendor type and the quantities of all items.
     """
     total = Decimal("0.00")
-    # Determine which price column to use
     vendor_type = sale.vendor.vendor_type if sale.vendor else "detail"
 
-    # We need to ensure we have the latest items from the session
     for item in sale.items:
         prod = item.product
         if not prod:
             continue
 
-        # Select price based on vendor category
         if vendor_type == "gros":
             price = prod.price_gros
         elif vendor_type == "superette":
@@ -416,7 +413,6 @@ def upsert_sale_item():
     qty = int(data.get("quantity", 0))
 
     try:
-        # 1. Get or Create the Sale Header
         sale = Sale.query.filter_by(vendor_id=v_id, date=target_date).first()
         if not sale:
             sale = Sale(
@@ -424,13 +420,12 @@ def upsert_sale_item():
                 distributor_id=d_id,
                 vendor_id=v_id,
                 supervisor_id=uid,
-                status="complete",  # Default for matrix
+                status="complete",
                 montant_total=0,
             )
             db.session.add(sale)
-            db.session.flush()  # Flush to get IDs and establish relationships
+            db.session.flush()
 
-        # 2. Update the specific SaleItem
         item = SaleItem.query.filter_by(sale_id=sale.id, product_id=p_id).first()
         old_qty = item.quantity if item else 0
 
@@ -444,15 +439,10 @@ def upsert_sale_item():
             else:
                 item.quantity = qty
 
-        # 3. Stock Sync (Only if status is complete)
         if sale.status == "complete":
-            # Delta logic: old=10, new=12 -> delta is -2 (remove 2 more from stock)
-            # old=10, new=2 -> delta is +8 (add 8 back to stock)
             delta = old_qty - qty
             update_stock_incremental(d_id, p_id, delta)
 
-        # 4. RECALCULATE TOTAL
-        # We flush again to make sure deleted items are gone/updated items are ready
         db.session.flush()
         recalculate_sale_total(sale)
 
@@ -477,7 +467,6 @@ def update_sale_status_by_date():
         sale = Sale.query.filter_by(vendor_id=v_id, date=target_date).first()
 
         if not sale:
-            # If status toggled on a day with no data, just create an empty record
             sale = Sale(
                 date=target_date,
                 distributor_id=d_id,
@@ -491,15 +480,11 @@ def update_sale_status_by_date():
             if old_status == new_status:
                 return jsonify({"message": "Aucun changement"}), 200
 
-            # --- Critical Inventory Logic ---
-            # 1. Moving TO 'complete': Subtract all quantities from stock
             if old_status != "complete" and new_status == "complete":
                 for itm in sale.items:
                     update_stock_incremental(
                         sale.distributor_id, itm.product_id, -itm.quantity
                     )
-
-            # 2. Moving FROM 'complete': Add back all quantities to stock
             elif old_status == "complete" and new_status != "complete":
                 for itm in sale.items:
                     update_stock_incremental(

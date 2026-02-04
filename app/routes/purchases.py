@@ -24,3 +24,8 @@ def update(id):
 @jwt_required()
 def destroy(id):
     return purchases_controller.delete_purchase(id)
+
+@purchases_bp.route("/matrix", methods=["GET"])
+@jwt_required()
+def get_matrix():
+    return purchases_controller.get_purchase_matrix()

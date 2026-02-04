@@ -37,14 +37,10 @@ def get_visits():
             )
         )
 
-    # Filters: Distributor & Status
+    # Filters: Distributor 
     dist_id = request.args.get("distributeur_id")
     if dist_id and dist_id != "all":
         query = query.filter(VisitView.distributor_id == dist_id)
-
-    status = request.args.get("status")
-    if status and status != "all":
-        query = query.filter(VisitView.status == status)
 
     # Pagination
     page = request.args.get("page", 1, type=int)
@@ -67,7 +63,6 @@ def get_visits():
                 "visites_programmees": v.visites_programmees,
                 "visites_effectuees": v.visites_effectuees,
                 "nb_factures": v.nb_factures,
-                "status": v.status,
             }
         )
 
@@ -86,7 +81,6 @@ def create_visit():
             visites_programmees=data.get("visites_programmees", 0),
             visites_effectuees=data.get("visites_effectuees", 0),
             nb_factures=data.get("nb_factures", 0),
-            status=data.get("status", "programmées/non effectuée"),
         )
         db.session.add(new_visit)
         db.session.commit()
@@ -112,7 +106,6 @@ def update_visit(visit_id):
             "visites_effectuees", visit.visites_effectuees
         )
         visit.nb_factures = data.get("nb_factures", visit.nb_factures)
-        visit.status = data.get("status", visit.status)
         visit.vendor_id = data.get("vendeurId", visit.vendor_id)
 
         db.session.commit()
@@ -204,7 +197,6 @@ def get_visit_matrix():
             "done": visit.visites_effectuees if visit else 0,
             "invoices": visit.nb_factures if visit else 0,
             "visit_id": visit.id if visit else None,
-            "status": visit.status if visit else "non effectuée"
         })
 
     return jsonify({
@@ -245,7 +237,6 @@ def upsert_visit():
             visites_programmees=0,
             visites_effectuees=0,
             nb_factures=0,
-            status="programmées/non effectuée"
         )
         db.session.add(visit)
 
@@ -256,14 +247,6 @@ def upsert_visit():
         visit.visites_effectuees = val
     elif field == "invoices": 
         visit.nb_factures = val
-
-    # 4. Update Status Logic
-    # FIX 2: Use (visit.visites_effectuees or 0) to prevent NoneType errors
-    if (visit.visites_effectuees or 0) > 0:
-        visit.status = "effectuée"
-    else:
-        # Optional: reset to programmed if they accidentally entered a number then cleared it
-        visit.status = "programmées/non effectuée"
 
     try:
         db.session.commit()

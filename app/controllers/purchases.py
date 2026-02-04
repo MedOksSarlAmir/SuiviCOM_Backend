@@ -5,7 +5,16 @@ from sqlalchemy import or_
 from datetime import datetime
 from decimal import Decimal
 from app.extensions import db
-from app.models import Purchase, PurchaseItem, User, Product, PurchaseView
+from app.models import (
+    Purchase,
+    PurchaseItem,
+    User,
+    Product,
+    PurchaseView,
+    ProductCategory,
+    ProductType,
+)
+
 from app.utils.inventory_sync import update_stock_incremental
 
 
@@ -79,6 +88,9 @@ def get_purchases():
                 "product_id": item.product_id,
                 "designation": item.product.designation,
                 "quantity": item.quantity,
+                "price_factory": float(
+                    item.product.price_factory or 0
+                ),  # Added price for popover details
             }
             for item in (real_purchase.items if real_purchase else [])
         ]
@@ -117,12 +129,12 @@ def create_purchase():
         for item in data.get("products", []):
             qty = int(item["quantity"])
             if qty <= 0:
-                return jsonify({"message": "Quantité invalide"}), 400
+                continue  # Skip zeros
 
             prod = Product.query.get_or_404(item["product_id"])
-            price = prod.price_factory  # assuming purchases use factory price
+            price = prod.price_factory
 
-            total_amount += Decimal(price) * qty
+            total_amount += Decimal(str(price)) * qty
             new_purchase.items.append(PurchaseItem(product_id=prod.id, quantity=qty))
 
             # Increment stock immediately if purchase complete
@@ -172,11 +184,11 @@ def update_purchase(purchase_id):
             for item in data["products"]:
                 qty = int(item["quantity"])
                 if qty <= 0:
-                    return jsonify({"message": "Quantité invalide"}), 400
+                    continue
 
                 prod = Product.query.get_or_404(item["product_id"])
                 price = prod.price_factory
-                total_amount += Decimal(price) * qty
+                total_amount += Decimal(str(price)) * qty
                 purchase.items.append(PurchaseItem(product_id=prod.id, quantity=qty))
 
         purchase.montant_total = total_amount
@@ -217,3 +229,70 @@ def delete_purchase(purchase_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
+
+
+def get_purchase_matrix():
+    purchase_id = request.args.get("purchase_id", type=int)
+    search = request.args.get("search", "")
+    cat = request.args.get("category", "all")
+    p_type = request.args.get("product_type", "all")
+    page = request.args.get("page", 1, type=int)
+    page_size = request.args.get("pageSize", 25, type=int)
+
+    # 1. Base Query
+    query = db.session.query(Product)
+
+    # 2. Join with PurchaseItem to allow sorting by existing quantity
+    if purchase_id:
+        # Left outer join so we don't lose products with 0 qty
+        query = query.outerjoin(
+            PurchaseItem,
+            db.and_(
+                PurchaseItem.product_id == Product.id,
+                PurchaseItem.purchase_id == purchase_id,
+            ),
+        )
+
+    # 3. Filters
+    query = query.filter(Product.active == True)
+    if cat != "all":
+        query = query.filter(Product.category_id == cat)
+    if p_type != "all":
+        query = query.filter(Product.type_id == p_type)
+    if search:
+        query = query.filter(
+            or_(
+                Product.designation.ilike(f"%{search}%"),
+                Product.code.ilike(f"%{search}%"),
+            )
+        )
+
+    # 4. Priority Ordering: Items in this purchase come first
+    if purchase_id:
+        query = query.order_by(
+            db.case((PurchaseItem.id != None, 0), else_=1), Product.designation.asc()
+        )
+    else:
+        query = query.order_by(Product.designation.asc())
+
+    pagination = query.paginate(page=page, per_page=page_size)
+
+    # If editing, get current quantities for this specific purchase
+    existing_qtys = {}
+    if purchase_id:
+        items = PurchaseItem.query.filter_by(purchase_id=purchase_id).all()
+        existing_qtys = {item.product_id: item.quantity for item in items}
+
+    data = []
+    for p in pagination.items:
+        data.append(
+            {
+                "product_id": p.id,
+                "code": p.code,
+                "designation": p.designation,
+                "price_factory": float(p.price_factory or 0),
+                "quantity": existing_qtys.get(p.id, 0),
+            }
+        )
+
+    return jsonify({"data": data, "total": pagination.total}), 200
