@@ -25,7 +25,7 @@ def test_manual_stock_adjustment(client, auth_headers, db):
 
     # Unique product code
     unique_code = f"P_ADJ_{uuid.uuid4().hex[:6]}"
-    prod = Product(code=unique_code, designation="Adj Prod")
+    prod = Product(code=unique_code, name="Adj Prod")
     db.session.add(prod)
     db.session.commit()
 

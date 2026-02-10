@@ -18,7 +18,7 @@ def test_real_concurrent_stock_updates(app):
 
         # Create test distributor and product
         dist = Distributor(nom="Concurrent_Test", wilaya_id=1, supervisor_id=1)
-        prod = Product(code="CONC_PROD", designation="Concurrent Product")
+        prod = Product(code="CONC_PROD", name="Concurrent Product")
         db.session.add_all([dist, prod])
         db.session.commit()
 

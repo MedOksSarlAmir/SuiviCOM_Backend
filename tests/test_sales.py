@@ -33,7 +33,7 @@ def test_create_sale_integration(client, auth_headers, db):
     unique_prod_code = f"P_{uuid.uuid4().hex[:6]}"
     prod = Product(
         code=unique_prod_code,
-        designation="Prod Test",
+        name="Prod Test",
         price_detail=Decimal("100.00"),
         active=True,
     )

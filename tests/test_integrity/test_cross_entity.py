@@ -62,7 +62,7 @@ def test_delete_distributor_cascade(client, auth_headers, db, app):
 
     prod = Product(
         code=f"P_DEL_{uuid.uuid4().hex[:4]}",
-        designation="Delete Test Product",
+        name="Delete Test Product",
         category_id=cat.id,
         type_id=p_type.id,
     )
@@ -155,7 +155,7 @@ def test_deactivate_product_integrity(client, auth_headers, db):
 
     prod = Product(
         code=f"P_DEACT_{uuid.uuid4().hex[:4]}",
-        designation="Product to Deactivate",
+        name="Product to Deactivate",
         category_id=cat.id,
         type_id=p_type.id,
         active=True,

@@ -70,7 +70,7 @@ def test_product_creation(db):
 
     product = Product(
         code=f"PROD_{uuid.uuid4().hex[:6]}",
-        designation="Cola 1L",
+        name="Cola 1L",
         format="1L",
         category_id=category.id,
         type_id=p_type.id,

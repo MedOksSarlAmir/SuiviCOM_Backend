@@ -77,7 +77,7 @@ def test_decimal_precision_handling(
 
     product = Product(
         code=f"DECIMAL_{uuid.uuid4().hex[:6]}",
-        designation="Precision Test",
+        name="Precision Test",
         price_detail=Decimal("123.456789"),
         active=True,
     )

@@ -179,7 +179,7 @@ def test_supervisor_cannot_access_others_inventory(client, auth_headers, db):
     db.session.flush()
 
     prod = Product(
-        code=f"P_SECRET_{uuid.uuid4().hex[:4]}", designation="Secret Product"
+        code=f"P_SECRET_{uuid.uuid4().hex[:4]}", name="Secret Product"
     )
     db.session.add(prod)
     db.session.flush()

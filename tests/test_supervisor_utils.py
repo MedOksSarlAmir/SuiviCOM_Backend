@@ -15,14 +15,14 @@ def test_category_format_hierarchy(client, auth_headers, db):
 
     p1 = Product(
         code=p1_code,
-        designation="Cola 1L",
+        name="Cola 1L",
         format="1L",
         category_id=cat.id,
         active=True,
     )
     p2 = Product(
         code=p2_code,
-        designation="Cola 33cl",
+        name="Cola 33cl",
         format="33cl",
         category_id=cat.id,
         active=True,

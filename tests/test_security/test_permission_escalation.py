@@ -129,7 +129,7 @@ def test_supervisor_modify_others_inventory_directly(client, auth_headers, db):
     db.session.flush()
 
     prod = Product(
-        code=f"P_INVATT_{uuid.uuid4().hex[:4]}", designation="Attack Product"
+        code=f"P_INVATT_{uuid.uuid4().hex[:4]}", name="Attack Product"
     )
     db.session.add(prod)
     db.session.flush()
@@ -207,7 +207,7 @@ def test_supervisor_create_sale_for_others_distributor(client, auth_headers, db)
     # Create a product
     from app.models import Product
 
-    prod = Product(code=f"P_SC_{uuid.uuid4().hex[:4]}", designation="Test Product")
+    prod = Product(code=f"P_SC_{uuid.uuid4().hex[:4]}", name="Test Product")
     db.session.add(prod)
     db.session.commit()
 

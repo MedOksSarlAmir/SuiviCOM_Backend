@@ -24,7 +24,7 @@ def test_create_purchase_lifecycle(client, auth_headers, db):
 
     unique_prod_code = f"P_PUR_{uuid.uuid4().hex[:6]}"
     prod = Product(
-        code=unique_prod_code, designation="Test P", price_factory=Decimal("50.0")
+        code=unique_prod_code, name="Test P", price_factory=Decimal("50.0")
     )
     db.session.add(prod)
     db.session.commit()
@@ -145,12 +145,12 @@ def test_purchase_update_product_change(client, auth_headers, db, test_distribut
     # Create two products
     prod1 = Product(
         code=f"P_UPDATE1_{uuid.uuid4().hex[:4]}",
-        designation="Product 1",
+        name="Product 1",
         price_factory=Decimal("50.0"),
     )
     prod2 = Product(
         code=f"P_UPDATE2_{uuid.uuid4().hex[:4]}",
-        designation="Product 2",
+        name="Product 2",
         price_factory=Decimal("75.0"),
     )
     db.session.add_all([prod1, prod2])

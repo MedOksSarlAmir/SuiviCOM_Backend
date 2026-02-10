@@ -18,7 +18,7 @@ def test_stock_incremental_update(app, db):
     db.session.flush()
 
     dist = Distributor(nom="Dist 1", wilaya_id=wil.id)
-    prod = Product(code=f"P_{uuid.uuid4().hex[:4]}", designation="Test Prod")
+    prod = Product(code=f"P_{uuid.uuid4().hex[:4]}", name="Test Prod")
     db.session.add_all([dist, prod])
     db.session.commit()
 

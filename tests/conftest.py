@@ -155,7 +155,7 @@ def test_product(db):
 
     prod = Product(
         code=f"PROD_{uuid.uuid4().hex[:6]}",
-        designation="Test Product",
+        name="Test Product",
         format="1L",
         category_id=cat.id,
         type_id=p_type.id,

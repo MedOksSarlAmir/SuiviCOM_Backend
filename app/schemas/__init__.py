@@ -1,6 +1,4 @@
-from .user import UserSchema
-from .transaction import (
-    SaleSchema,
-    SaleItemSchema,
-    PurchaseSchema,
-)
+from .user_schema import UserSchema
+from .product_schema import ProductSchema
+from .transaction_schema import SaleSchema, SaleItemSchema, PurchaseSchema
+from .distributor_schema import DistributorSchema

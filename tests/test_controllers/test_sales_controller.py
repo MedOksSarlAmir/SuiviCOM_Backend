@@ -114,7 +114,7 @@ def test_create_sale_with_multiple_products(
 
     product2 = Product(
         code=f"PROD2_{uuid.uuid4().hex[:6]}",
-        designation="Test Product 2",
+        name="Test Product 2",
         price_detail=Decimal("150.0"),
         active=True,
     )
