@@ -16,6 +16,10 @@ def get_stock():
 def adjust():
     return inventory_controller.adjust_stock()
 
+@inventory_bp.route("/adjust/<int:adj_id>", methods=["DELETE"])
+@jwt_required()
+def delete_adjustment(adj_id):
+    return inventory_controller.delete_adjustment(adj_id)
 
 @inventory_bp.route("/history/<int:dist_id>/<int:prod_id>", methods=["GET"])
 @jwt_required()

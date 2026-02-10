@@ -102,6 +102,23 @@ def adjust_stock():
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
 
+def delete_adjustment(adj_id):
+    adj = StockAdjustment.query.get_or_404(adj_id)
+
+    try:
+        update_stock_incremental(
+            adj.distributor_id,
+            adj.product_id,
+            -adj.quantity,
+        )
+
+        db.session.delete(adj)
+        db.session.commit()
+        return jsonify({"message": "Ajustement supprimé"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": str(e)}), 500
 
 def get_history(dist_id, prod_id):
     query = InventoryHistoryView.query.filter_by(
@@ -114,6 +131,7 @@ def get_history(dist_id, prod_id):
             {
                 "data": [
                     {
+                        "id" : h.ref_id,
                         "date": h.date.isoformat(),
                         "type": h.type,
                         "quantity": h.quantity,
