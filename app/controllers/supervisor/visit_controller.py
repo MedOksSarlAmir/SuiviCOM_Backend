@@ -31,10 +31,7 @@ def get_visit_matrix():
     # 🔹 Base query with OUTER JOIN to visits on the selected date
     vendor_query = (
         db.session.query(Vendor)
-        .outerjoin(
-            Visit,
-            and_(Visit.vendor_id == Vendor.id, Visit.date == target_date)
-        )
+        .outerjoin(Visit, and_(Visit.vendor_id == Vendor.id, Visit.date == target_date))
         .filter(Vendor.distributor_id == dist_id)
     )
 
@@ -54,12 +51,7 @@ def get_visit_matrix():
 
     # 🔹 IMPORTANT CONDITION
     # Show vendor if ACTIVE or has a visit row for that date
-    vendor_query = vendor_query.filter(
-        or_(
-            Vendor.active == True,
-            Visit.id.isnot(None)
-        )
-    )
+    vendor_query = vendor_query.filter(or_(Vendor.active == True, Visit.id.isnot(None)))
 
     # Remove duplicates caused by join
     vendor_query = vendor_query.distinct()
@@ -79,30 +71,35 @@ def get_visit_matrix():
     data = []
     for v in vendors:
         visit = visit_map.get(v.id)
-        data.append({
-            "vendor_id": v.id,
-            "vendor_name": f"{v.first_name} {v.last_name}",
-            "vendor_code": v.code,
-            "planned": visit.planned_visits if visit else 0,
-            "actual": visit.actual_visits if visit else 0,
-            "invoices": visit.invoice_count if visit else 0,
-            "visit_id": visit.id if visit else None,
-            "active": v.active,
-        })
+        data.append(
+            {
+                "vendor_id": v.id,
+                "vendor_name": f"{v.first_name} {v.last_name}",
+                "vendor_code": v.code,
+                "vendor_type": v.vendor_type,
+                "planned": visit.planned_visits if visit else 0,
+                "actual": visit.actual_visits if visit else 0,
+                "invoices": visit.invoice_count if visit else 0,
+                "visit_id": visit.id if visit else None,
+                "active": v.active,
+            }
+        )
 
-    return jsonify({
-        "data": data,
-        "total": paginated["total"],
-        "current_distributor": dist_id
-    }), 200
+    return (
+        jsonify(
+            {"data": data, "total": paginated["total"], "current_distributor": dist_id}
+        ),
+        200,
+    )
+
 
 def upsert_visit():
     uid = get_jwt_identity()
     user = User.query.get(uid)
-    data = request.json 
+    data = request.json
 
     vendor = Vendor.query.get_or_404(data["vendor_id"])
-    
+
     # 🔹 RESTORED PERMISSION CHECK
     if user.role == "superviseur":
         if vendor.supervisor_id != int(uid):
@@ -115,13 +112,24 @@ def upsert_visit():
     visit = Visit.query.filter_by(vendor_id=vendor.id, date=target_date).first()
 
     if not visit:
-        visit = Visit(date=target_date, vendor_id=vendor.id, distributor_id=vendor.distributor_id, supervisor_id=uid, planned_visits=0, actual_visits=0, invoice_count=0)
+        visit = Visit(
+            date=target_date,
+            vendor_id=vendor.id,
+            distributor_id=vendor.distributor_id,
+            supervisor_id=uid,
+            planned_visits=0,
+            actual_visits=0,
+            invoice_count=0,
+        )
         db.session.add(visit)
 
     # 🔹 SUPPORT BOTH FRONTEND NAMING CONVENTIONS
-    if field in ["planned", "prog"]: visit.planned_visits = val
-    elif field in ["actual", "done"]: visit.actual_visits = val
-    elif field in ["invoices", "nb_factures"]: visit.invoice_count = val
+    if field in ["planned", "prog"]:
+        visit.planned_visits = val
+    elif field in ["actual", "done"]:
+        visit.actual_visits = val
+    elif field in ["invoices", "nb_factures"]:
+        visit.invoice_count = val
 
     db.session.commit()
     return jsonify({"success": True, "visit_id": visit.id}), 200
