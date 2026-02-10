@@ -10,31 +10,52 @@ from app.utils.stock_ops import update_stock_incremental
 from app.utils.pagination import paginate
 
 
+
 def list_purchases():
     uid = get_jwt_identity()
     user = User.query.get_or_404(uid)
 
-    # 1. Start with the View for efficient filtering
     query = PurchaseView.query
+    
     if user.role == "superviseur":
         query = query.filter(PurchaseView.supervisor_id == uid)
 
-    # Date filters
+    search = request.args.get("search")
+    if search:
+        query = query.filter(PurchaseView.id.ilike(f"%{search}%"))
+
+    status = request.args.get("status")
+    if status and status != "all":
+        query = query.filter(PurchaseView.status == status)
+
+    # Distributor ID filter
+    distributor_id = request.args.get("distributor_id")
+    if distributor_id and distributor_id != "all":
+        query = query.filter(PurchaseView.distributor_id == distributor_id)
+
+    # Date filters (Existing)
     start_date = request.args.get("startDate")
     end_date = request.args.get("endDate")
     if start_date:
-        query = query.filter(PurchaseView.date >= datetime.fromisoformat(start_date).date())
+        try:
+            query = query.filter(PurchaseView.date >= datetime.fromisoformat(start_date).date())
+        except ValueError:
+            pass # Handle invalid date format
     if end_date:
-        query = query.filter(PurchaseView.date <= datetime.fromisoformat(end_date).date())
+        try:
+            query = query.filter(PurchaseView.date <= datetime.fromisoformat(end_date).date())
+        except ValueError:
+            pass
+    # ----------------------
 
     # 2. Paginate the view results
+    # Ensure your paginate function reads "pageSize" from request.args as sent by frontend
     paginated = paginate(query.order_by(PurchaseView.date.desc()))
     
     # 3. Get the IDs of the purchases on the current page
     purchase_ids = [p.id for p in paginated["items"]]
 
-    # 4. Fetch the actual Purchase objects with their items and product details in ONE query
-    # We use joinedload to avoid "N+1" query problems (fetching items one by one)
+    # 4. Fetch the actual Purchase objects with their items and product details
     actual_purchases = (
         Purchase.query
         .options(joinedload(Purchase.items).joinedload(PurchaseItem.product))
@@ -42,22 +63,19 @@ def list_purchases():
         .all()
     )
     
-    # Create a map { id: purchase_object } for easy retrieval
     purchase_map = {p.id: p for p in actual_purchases}
 
     # 5. Build the final response
     results = []
     for p_view in paginated["items"]:
-        # Get the full object from our map
         full_purchase = purchase_map.get(p_view.id)
         
-        # Format the product list for the frontend popover
         product_list = []
         if full_purchase:
             for item in full_purchase.items:
                 product_list.append({
                     "product_id": item.product_id,
-                    "name": item.product.name, # Backend 'name' is 'designation'
+                    "name": item.product.name, 
                     "quantity": item.quantity,
                     "price_factory": float(item.product.price_factory or 0)
                 })
@@ -69,10 +87,11 @@ def list_purchases():
             "distributor_id": p_view.distributor_id,
             "total_amount": float(p_view.total_amount or 0),
             "status": p_view.status,
-            "products": product_list # <--- This is your list for the hover/popover
+            "products": product_list 
         })
 
     return jsonify({"data": results, "total": paginated["total"]}), 200
+
 
 def create_purchase():
     uid = get_jwt_identity()
