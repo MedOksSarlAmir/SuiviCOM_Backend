@@ -42,7 +42,7 @@ def create_distributor():
     )
     db.session.add(new_dist)
     db.session.commit()
-    return jsonify({"message": "Distributor created", "id": new_dist.id}), 201
+    return jsonify({"message": "Distributeur créé avec succès", "id": new_dist.id}), 201
 
 
 def update_distributor(dist_id):
@@ -55,7 +55,7 @@ def update_distributor(dist_id):
     dist.wilaya_id = data.get("wilaya_id", dist.wilaya_id)
 
     db.session.commit()
-    return jsonify({"message": "Distributor updated"}), 200
+    return jsonify({"message": "Distributeur mis à jour"}), 200
 
 
 def bulk_reassign_distributors():
@@ -65,10 +65,10 @@ def bulk_reassign_distributors():
     new_supervisor_id = data.get("supervisor_id")
 
     if not distributor_ids or not new_supervisor_id:
-        return jsonify({"message": "Missing data"}), 400
+        return jsonify({"message": "Données manquantes"}), 400
 
     Distributor.query.filter(Distributor.id.in_(distributor_ids)).update(
         {Distributor.supervisor_id: new_supervisor_id}, synchronize_session=False
     )
     db.session.commit()
-    return jsonify({"message": f"{len(distributor_ids)} distributors reassigned"}), 200
+    return jsonify({"message": f"{len(distributor_ids)} distributeurs réassignés"}), 200

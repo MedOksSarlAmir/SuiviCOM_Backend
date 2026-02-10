@@ -102,7 +102,7 @@ def create_purchase():
     new_purchase.total_amount = total
     db.session.add(new_purchase)
     db.session.commit()
-    return jsonify({"message": "Purchase recorded", "id": new_purchase.id}), 201
+    return jsonify({"message": "Achat enregistré avec succès", "id": new_purchase.id}), 201
 
 
 
@@ -132,7 +132,7 @@ def update_purchase(purchase_id):
                 update_stock_incremental(purchase.distributor_id, item.product_id, item.quantity)
 
         db.session.commit()
-        return jsonify({"message": "Purchase updated"}), 200
+        return jsonify({"message": "Achat mis à jour avec succès"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
@@ -148,7 +148,7 @@ def delete_purchase(purchase_id):
         
         db.session.delete(purchase)
         db.session.commit()
-        return jsonify({"message": "Purchase deleted"}), 200
+        return jsonify({"message": "Achat supprimé avec succès"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500

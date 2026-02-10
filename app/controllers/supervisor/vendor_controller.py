@@ -36,7 +36,7 @@ def list_vendors():
             )
         )
 
-    paginated = paginate(query.order_by(Vendor.last_name.asc()))
+    paginated = paginate(query.order_by(Vendor.id.desc()))
 
     return (
         jsonify(
@@ -68,7 +68,7 @@ def create_vendor():
     data = request.json
     try:
         if Vendor.query.filter_by(code=data["code"]).first():
-            return jsonify({"message": "Code vendor already exists"}), 400
+            return jsonify({"message": "Ce code de vendeur existe déjà"}), 400
 
         new_vendor = Vendor(
             code=data["code"],
@@ -81,7 +81,7 @@ def create_vendor():
         )
         db.session.add(new_vendor)
         db.session.commit()
-        return jsonify({"message": "Vendor created", "id": new_vendor.id}), 201
+        return jsonify({"message": "Vendeur créé avec succès", "id": new_vendor.id}), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
@@ -95,7 +95,7 @@ def update_vendor(vendor_id):
     vendor.vendor_type = data.get("type", vendor.vendor_type)
     vendor.active = data.get("active", vendor.active)
     db.session.commit()
-    return jsonify({"message": "Vendor updated"}), 200
+    return jsonify({"message": "Vendeur mis à jour avec succès"}), 200
 
 
 def delete_vendor(vendor_id):
@@ -106,7 +106,7 @@ def delete_vendor(vendor_id):
         return (
             jsonify(
                 {
-                    "message": "Cannot delete vendor with existing sales or visits. Deactivate them instead."
+                    "message": "Impossible de supprimer un vendeur ayant des ventes ou des visites. Désactivez-le plutôt."
                 }
             ),
             400,
@@ -115,7 +115,7 @@ def delete_vendor(vendor_id):
     try:
         db.session.delete(vendor)
         db.session.commit()
-        return jsonify({"message": "Vendor deleted"}), 200
+        return jsonify({"message": "Vendeur supprimé avec succès"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500

@@ -10,6 +10,7 @@ class Vendor(db.Model):
     last_name = db.Column("nom", db.String(100))
     first_name = db.Column("prenom", db.String(100))
     vendor_type = db.Column("vendor_type", db.String(20))  # gros, detail, superette
+    created_at = db.Column(db.DateTime, default=db.func.now())
 
     distributor_id = db.Column(db.Integer, db.ForeignKey("dbo.distributors.id"))
     supervisor_id = db.Column(db.Integer, db.ForeignKey("dbo.users.id"))
@@ -18,3 +19,4 @@ class Vendor(db.Model):
     # Relationships
     distributor = db.relationship("Distributor", backref="vendors")
     supervisor = db.relationship("User", backref="supervised_vendors")
+    

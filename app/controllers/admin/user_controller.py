@@ -55,7 +55,7 @@ def update_user(user_id):
         )
 
     db.session.commit()
-    return jsonify({"message": "User updated"}), 200
+    return jsonify({"message": "Utilisateur mis à jour"}), 200
 
 
 def create_user():

@@ -148,7 +148,7 @@ def get_weekly_matrix():
     fmt = request.args.get("format", "all")
 
     if not start_date_str or not vendor_id:
-        return jsonify({"message": "Vendor and Date required"}), 400
+        return jsonify({"message": "Date et vendeur requis"}), 400
 
     vendor = Vendor.query.get_or_404(int(vendor_id))
 

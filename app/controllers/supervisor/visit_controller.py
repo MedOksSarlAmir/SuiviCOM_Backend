@@ -13,7 +13,7 @@ def get_visit_matrix():
     target_date = request.args.get("date")
 
     if not target_date:
-        return jsonify({"message": "Date required"}), 400
+        return jsonify({"message": "Date requise"}), 400
 
     # 🔹 Supervisor scoping
     if user and user.role == "superviseur":

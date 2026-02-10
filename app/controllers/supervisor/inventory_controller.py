@@ -33,7 +33,7 @@ def get_current_stock():
             dist_id = assigned_ids[0]  # Default to first allowed
 
     if not dist_id:
-        return jsonify({"data": [], "message": "Distributor ID required"}), 400
+        return jsonify({"data": [], "message": "Aucun distributeur sélectionné"}), 400
 
     # 🔹 RESTORED SEARCH & JOIN
     query = Inventory.query.join(Product).filter(Inventory.distributor_id == dist_id)
@@ -97,7 +97,7 @@ def adjust_stock():
         update_stock_incremental(dist_id, prod_id, qty)
 
         db.session.commit()
-        return jsonify({"message": "Adjustment saved"}), 201
+        return jsonify({"message": "Ajustement enregistré"}), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
@@ -152,7 +152,7 @@ def refresh_inventory():
     try:
         db.session.execute(text("EXEC dbo.sp_refresh_inventory"))
         db.session.commit()
-        return jsonify({"message": "Stock recalculated successfully"}), 200
+        return jsonify({"message": "Inventaire mis à jour avec succès"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
