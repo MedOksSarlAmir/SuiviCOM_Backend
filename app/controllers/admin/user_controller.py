@@ -4,7 +4,9 @@ from app.models import User
 from app.utils.pagination import paginate
 from sqlalchemy import or_
 from app.schemas import UserSchema
+
 user_schema = UserSchema(many=True)
+
 
 def list_users():
     search = request.args.get("search", "")
@@ -28,10 +30,15 @@ def list_users():
 
     paginated_data = paginate(query)
 
-    return jsonify({
-        "data": user_schema.dump(paginated_data["items"]),
-        "total": paginated_data["total"]
-    }), 200
+    return (
+        jsonify(
+            {
+                "data": user_schema.dump(paginated_data["items"]),
+                "total": paginated_data["total"],
+            }
+        ),
+        200,
+    )
 
 
 def update_user(user_id):
@@ -47,8 +54,14 @@ def update_user(user_id):
     # Geo update
     user.region_id = data.get("region_id", user.region_id)
     user.zone_id = data.get("zone_id", user.zone_id)
-    user.wilaya_id = data.get("wilaya_id", user.wilaya_id)
+    if "wilaya_ids" in data:
+        from app.models.geography import Wilaya
 
+        # Clear existing and add new
+        new_wilayas = Wilaya.query.filter(Wilaya.id.in_(data["wilaya_ids"])).all()
+        user.assigned_wilayas = new_wilayas
+
+    db.session.commit()
     if data.get("password"):
         user.password_hash = bcrypt.generate_password_hash(data["password"]).decode(
             "utf-8"
@@ -67,8 +80,8 @@ def create_user():
         username=data["username"],
         password_hash=bcrypt.generate_password_hash(data["password"]).decode("utf-8"),
         role=data["role"],
-        last_name=data.get("last_name"), # maps to nom
-        first_name=data.get("first_name"), # maps to prenom
+        last_name=data.get("last_name"),  # maps to nom
+        first_name=data.get("first_name"),  # maps to prenom
         phone=data.get("phone"),
         region_id=data.get("region_id"),
         zone_id=data.get("zone_id"),
@@ -79,14 +92,20 @@ def create_user():
     db.session.commit()
     return jsonify({"message": "Utilisateur créé", "id": new_user.id}), 201
 
+
 def delete_user(user_id):
     user = User.query.get_or_404(user_id)
 
     # 🔹 RESTORED: Dependency Check
     if user.supervised_distributors or user.supervised_sales:
-        return jsonify({
-            "message": "Impossible de supprimer: cet utilisateur a des données liées (Distributeurs ou Ventes). Désactivez-le à la place."
-        }), 400
+        return (
+            jsonify(
+                {
+                    "message": "Impossible de supprimer: cet utilisateur a des données liées (Distributeurs ou Ventes). Désactivez-le à la place."
+                }
+            ),
+            400,
+        )
 
     db.session.delete(user)
     db.session.commit()

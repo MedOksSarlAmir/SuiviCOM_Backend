@@ -2,6 +2,16 @@ from app.extensions import db
 from datetime import datetime
 
 
+user_wilayas = db.Table(
+    "user_wilayas",
+    db.Column("user_id", db.Integer, db.ForeignKey("dbo.users.id"), primary_key=True),
+    db.Column(
+        "wilaya_id", db.Integer, db.ForeignKey("dbo.wilayas.id"), primary_key=True
+    ),
+    schema="dbo",
+)
+
+
 class User(db.Model):
     __tablename__ = "users"
     __table_args__ = {"schema": "dbo"}
@@ -25,7 +35,12 @@ class User(db.Model):
     # Relationship to the classes
     region = db.relationship("Region", backref="users")
     zone = db.relationship("Zone", backref="users")
-    wilaya = db.relationship("Wilaya", backref="users")
+
+    assigned_wilayas = db.relationship(
+        "Wilaya",
+        secondary=user_wilayas,
+        backref=db.backref("supervisors", lazy="dynamic"),
+    )
 
     def to_dict(self):
         ROLE_GEO_SCOPE = {
@@ -47,5 +62,5 @@ class User(db.Model):
             "geo_scope": ROLE_GEO_SCOPE.get(self.role, "N/A"),
             "region": self.region.name if self.region else None,
             "zone": self.zone.name if self.zone else None,
-            "wilaya": self.wilaya.name if self.wilaya else None,
+            "wilayas": [{"id": w.id, "name": w.name} for w in self.assigned_wilayas],
         }
