@@ -30,3 +30,8 @@ def get_history(dist_id, prod_id):
 @jwt_required()
 def refresh():
     return inventory_controller.refresh_inventory()
+
+@inventory_bp.route("/physical", methods=["POST"])
+@jwt_required()
+def save_physical():
+    return inventory_controller.upsert_physical_inventory()

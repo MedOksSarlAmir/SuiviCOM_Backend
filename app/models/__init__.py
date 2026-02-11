@@ -6,4 +6,4 @@ from .vendor import Vendor
 from .sale import Sale, SaleItem, SaleView
 from .purchase import Purchase, PurchaseItem, PurchaseView
 from .visit import Visit, VisitView
-from .inventory import Inventory, StockAdjustment, InventoryHistoryView
+from .inventory import Inventory, StockAdjustment, InventoryHistoryView, PhysicalInventory

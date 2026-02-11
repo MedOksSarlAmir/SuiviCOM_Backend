@@ -7,12 +7,13 @@ from app.models import (
     StockAdjustment,
     Product,
     User,
-    Distributor
+    Distributor,
+    PhysicalInventory,
 )
 from app.utils.stock_ops import update_stock_incremental
 from app.utils.pagination import paginate
 from datetime import datetime
-from sqlalchemy import text, or_
+from sqlalchemy import and_, text, or_
 
 
 def get_current_stock():
@@ -35,8 +36,19 @@ def get_current_stock():
     if not dist_id:
         return jsonify({"data": [], "message": "Aucun distributeur sélectionné"}), 400
 
-    # 🔹 RESTORED SEARCH & JOIN
-    query = Inventory.query.join(Product).filter(Inventory.distributor_id == dist_id)
+    # Join with Product AND PhysicalInventory
+    query = (
+        db.session.query(Inventory, PhysicalInventory.quantity.label("physical_qty"))
+        .join(Product, Inventory.product_id == Product.id)
+        .outerjoin(
+            PhysicalInventory,
+            and_(
+                PhysicalInventory.distributor_id == Inventory.distributor_id,
+                PhysicalInventory.product_id == Inventory.product_id,
+            ),
+        )
+        .filter(Inventory.distributor_id == dist_id)
+    )
 
     if search:
         query = query.filter(
@@ -53,21 +65,17 @@ def get_current_stock():
             {
                 "data": [
                     {
-                        "product_id": i.product_id,
-                        "product_name": i.product.name,
-                        "product_code": i.product.code,
-                        "category": (
-                            i.product.category.name if i.product.category else "N/A"
-                        ),
-                        "quantity": i.quantity,
-                        "last_updated": (
-                            i.last_updated.isoformat() if i.last_updated else None
-                        ),
+                        "product_id": item.Inventory.product_id,
+                        "product_name": item.Inventory.product.name,
+                        "product_code": item.Inventory.product.code,
+                        "theoretical_qty": item.Inventory.quantity,  # Logique
+                        "physical_qty": (
+                            item.physical_qty if item.physical_qty is not None else 0
+                        ),  # Réel
                     }
-                    for i in paginated["items"]
+                    for item in paginated["items"]
                 ],
                 "total": paginated["total"],
-                "current_distributor": dist_id,
             }
         ),
         200,
@@ -102,6 +110,7 @@ def adjust_stock():
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
 
+
 def delete_adjustment(adj_id):
     adj = StockAdjustment.query.get_or_404(adj_id)
 
@@ -120,31 +129,46 @@ def delete_adjustment(adj_id):
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
 
-def get_history(dist_id, prod_id):
-    query = InventoryHistoryView.query.filter_by(
-        distributor_id=dist_id, product_id=prod_id
-    )
-    paginated = paginate(query.order_by(InventoryHistoryView.date.desc()))
 
-    return (
-        jsonify(
-            {
-                "data": [
-                    {
-                        "id" : h.ref_id,
-                        "date": h.date.isoformat(),
-                        "type": h.type,
-                        "quantity": h.quantity,
-                        "actor": h.actor_name,
-                        "note": h.note,
-                    }
-                    for h in paginated["items"]
-                ],
-                "total": paginated["total"],
-            }
-        ),
-        200,
+def get_history(dist_id, prod_id):
+    move_type = request.args.get("type")
+    vendor_id = request.args.get("vendor_id")
+    start_date = request.args.get("startDate")
+    end_date = request.args.get("endDate")
+
+    query = InventoryHistoryView.query.filter_by(
+        distributor_id=dist_id, 
+        product_id=prod_id
     )
+
+    if move_type and move_type != "all":
+        query = query.filter(InventoryHistoryView.type == move_type)
+    
+    if vendor_id and vendor_id != "all":
+        query = query.filter(InventoryHistoryView.vendor_id == int(vendor_id))
+
+    if start_date:
+        query = query.filter(InventoryHistoryView.created_at >= start_date)
+    if end_date:
+        query = query.filter(InventoryHistoryView.created_at <= f"{end_date} 23:59:59")
+
+    # Sort by created_at DESC for chronological real order
+    paginated = paginate(query.order_by(InventoryHistoryView.created_at.desc()))
+
+    return jsonify({
+        "data": [
+            {
+                "id": h.ref_id,
+                "date": h.created_at.isoformat(),
+                "type": h.type,
+                "quantity": h.quantity,
+                "actor": h.actor_name,
+                "note": h.note,
+            }
+            for h in paginated["items"]
+        ],
+        "total": paginated["total"],
+    }), 200
 
 
 def refresh_inventory():
@@ -153,6 +177,32 @@ def refresh_inventory():
         db.session.execute(text("EXEC dbo.sp_refresh_inventory"))
         db.session.commit()
         return jsonify({"message": "Inventaire mis à jour avec succès"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": str(e)}), 500
+
+
+def upsert_physical_inventory():
+    data = request.json
+    dist_id = data.get("distributor_id")
+    prod_id = data.get("product_id")
+    qty = data.get("quantity")
+
+    try:
+        # MSSQL Upsert logic
+        physical = PhysicalInventory.query.filter_by(
+            distributor_id=dist_id, product_id=prod_id
+        ).first()
+        if not physical:
+            physical = PhysicalInventory(
+                distributor_id=dist_id, product_id=prod_id, quantity=qty
+            )
+            db.session.add(physical)
+        else:
+            physical.quantity = qty
+
+        db.session.commit()
+        return jsonify({"message": "Inventaire physique enregistré"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
