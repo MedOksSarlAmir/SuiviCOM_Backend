@@ -171,12 +171,29 @@ def get_history(dist_id, prod_id):
     }), 200
 
 
+# app/controllers/supervisor/inventory_controller.py
+
 def refresh_inventory():
-    """Triggers the Stored Procedure to rebuild stock from scratch"""
+    uid = get_jwt_identity()
+    data = request.json
+    dist_id = data.get("distributor_id")
+
+    if not dist_id:
+        return jsonify({"message": "ID Distributeur manquant"}), 400
+
+    # 🔹 SECURITY CHECK: Verify supervisor ownership
+    distributor = Distributor.query.filter_by(id=dist_id, supervisor_id=uid).first()
+    if not distributor:
+        return jsonify({"message": "Accès non autorisé à ce distributeur"}), 403
+
     try:
-        db.session.execute(text("EXEC dbo.sp_refresh_inventory"))
+        # Pass the distributor_id to the scoped SP
+        db.session.execute(
+            text("EXEC dbo.sp_refresh_inventory @distributor_id=:d_id"),
+            {"d_id": dist_id}
+        )
         db.session.commit()
-        return jsonify({"message": "Inventaire mis à jour avec succès"}), 200
+        return jsonify({"message": f"Inventaire de '{distributor.name}' synchronisé"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
