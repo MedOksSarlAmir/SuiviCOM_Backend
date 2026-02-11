@@ -15,3 +15,9 @@ def get_matrix():
 @jwt_required()
 def upsert_visit():
     return visit_controller.upsert_visit()
+
+
+@visit_bp.route("/bulk-upsert", methods=["POST"])
+@jwt_required()
+def bulk_upsert_visits():
+    return visit_controller.bulk_upsert_visits()

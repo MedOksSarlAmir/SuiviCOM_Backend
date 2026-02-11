@@ -282,3 +282,68 @@ def update_sale_status_by_date():
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
+    
+
+
+def bulk_upsert_sale_items():
+    uid = get_jwt_identity()
+    changes = request.json  # List of {vendor_id, product_id, date, quantity}
+
+    if not isinstance(changes, list):
+        return jsonify({"message": "Liste attendue"}), 400
+
+    try:
+        # Group by (vendor_id, date) to manage the parent Sale record
+        grouped_sales = {}
+        for c in changes:
+            key = (c['vendor_id'], c['date'])
+            if key not in grouped_sales:
+                grouped_sales[key] = []
+            grouped_sales[key].append(c)
+
+        for (v_id, target_date), items in grouped_sales.items():
+            vendor = Vendor.query.get(v_id)
+            if not vendor: continue
+
+            sale = Sale.query.filter_by(vendor_id=v_id, date=target_date).first()
+            if not sale:
+                sale = Sale(
+                    date=target_date,
+                    distributor_id=vendor.distributor_id,
+                    vendor_id=v_id,
+                    supervisor_id=uid,
+                    status="complete",
+                    total_amount=0
+                )
+                db.session.add(sale)
+                db.session.flush()
+
+            for item_data in items:
+                p_id = item_data['product_id']
+                qty = int(item_data.get('quantity', 0))
+                
+                item = SaleItem.query.filter_by(sale_id=sale.id, product_id=p_id).first()
+                old_qty = item.quantity if item else 0
+
+                if qty <= 0:
+                    if item: db.session.delete(item)
+                else:
+                    if not item:
+                        item = SaleItem(sale_id=sale.id, product_id=p_id, quantity=qty)
+                        db.session.add(item)
+                    else:
+                        item.quantity = qty
+
+                # Stock Sync
+                if sale.status == "complete":
+                    delta = old_qty - qty
+                    update_stock_incremental(vendor.distributor_id, p_id, delta)
+
+            db.session.flush()
+            _recalculate_total(sale)
+
+        db.session.commit()
+        return jsonify({"success": True, "message": "Ventes mises à jour"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": str(e)}), 500

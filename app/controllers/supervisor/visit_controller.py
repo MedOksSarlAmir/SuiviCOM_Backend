@@ -133,3 +133,62 @@ def upsert_visit():
 
     db.session.commit()
     return jsonify({"success": True, "visit_id": visit.id}), 200
+
+
+def bulk_upsert_visits():
+    uid = get_jwt_identity()
+    user = User.query.get(uid)
+    changes = request.json  # Expects a list of dicts
+
+    if not isinstance(changes, list):
+        return jsonify({"message": "Format invalide, liste attendue"}), 400
+
+    processed_count = 0
+    try:
+        # Group changes by (vendor_id, date) to avoid fetching same record multiple times
+        grouped = {}
+        for item in changes:
+            key = (item['vendor_id'], item['date'])
+            if key not in grouped:
+                grouped[key] = []
+            grouped[key].append(item)
+
+        for (v_id, target_date), items in grouped.items():
+            vendor = Vendor.query.get(v_id)
+            if not vendor: continue
+
+            # Permission check
+            if user.role == "superviseur" and vendor.supervisor_id != int(uid):
+                continue
+
+            visit = Visit.query.filter_by(vendor_id=v_id, date=target_date).first()
+            if not visit:
+                visit = Visit(
+                    date=target_date,
+                    vendor_id=v_id,
+                    distributor_id=vendor.distributor_id,
+                    supervisor_id=uid,
+                    planned_visits=0,
+                    actual_visits=0,
+                    invoice_count=0,
+                )
+                db.session.add(visit)
+
+            for item in items:
+                field = item['field']
+                val = int(item.get('value', 0))
+                
+                if field in ["planned", "prog"]:
+                    visit.planned_visits = val
+                elif field in ["actual", "done"]:
+                    visit.actual_visits = val
+                elif field in ["invoices", "nb_factures"]:
+                    visit.invoice_count = val
+            
+            processed_count += 1
+
+        db.session.commit()
+        return jsonify({"success": True, "processed": processed_count}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": str(e)}), 500

@@ -39,3 +39,8 @@ def update_sale(id):
 @jwt_required()
 def delete_sale(id):
     return sale_controller.delete_sale(id)
+
+@sale_bp.route("/bulk-upsert", methods=["POST"])
+@jwt_required()
+def bulk_upsert_sales():
+    return sale_controller.bulk_upsert_sale_items()
