@@ -15,27 +15,31 @@ def get_visit_matrix():
     if not target_date:
         return jsonify({"message": "Date requise"}), 400
 
-    # 🔹 Supervisor scoping
+    # 🔹 SCOPING: Get assigned distributors from the junction table
     if user and user.role == "superviseur":
-        assigned = [d.id for d in Distributor.query.filter_by(supervisor_id=uid).all()]
-        if not assigned:
+        assigned_ids = [d.id for d in user.supervised_distributors]
+
+        if not assigned_ids:
             return jsonify({"data": [], "message": "Aucun distributeur assigné"}), 200
+
+        # Default to the first assigned distributor if none specified
         if not dist_id:
-            dist_id = assigned[0]
-        if dist_id not in assigned:
-            return jsonify({"message": "Accès non autorisé"}), 403
+            dist_id = assigned_ids[0]
+
+        # 🔹 SECURITY: Ensure requested distributor is in the supervisor's list
+        if dist_id not in assigned_ids:
+            return jsonify({"message": "Accès non autorisé à ce distributeur"}), 403
 
     search = request.args.get("search", "")
     v_type = request.args.get("vendor_type", "all")
 
-    # 🔹 Base query with OUTER JOIN to visits on the selected date
+    # Base query: Join vendors with their visit data for the specific date
     vendor_query = (
         db.session.query(Vendor)
         .outerjoin(Visit, and_(Visit.vendor_id == Vendor.id, Visit.date == target_date))
         .filter(Vendor.distributor_id == dist_id)
     )
 
-    # 🔹 Search filter
     if search:
         vendor_query = vendor_query.filter(
             or_(
@@ -45,24 +49,19 @@ def get_visit_matrix():
             )
         )
 
-    # 🔹 Vendor type filter
     if v_type != "all":
         vendor_query = vendor_query.filter(Vendor.vendor_type == v_type)
 
-    # 🔹 IMPORTANT CONDITION
-    # Show vendor if ACTIVE or has a visit row for that date
+    # Show vendor if ACTIVE or if they already have data for this date
     vendor_query = vendor_query.filter(or_(Vendor.active == True, Visit.id.isnot(None)))
-
-    # Remove duplicates caused by join
     vendor_query = vendor_query.distinct()
 
-    # Pagination (still accurate now)
     paginated = paginate(vendor_query.order_by(Vendor.last_name.asc()))
 
     vendors = paginated["items"]
     vendor_ids = [v.id for v in vendors]
 
-    # 🔹 Fetch visit rows separately for mapping (only for visible vendors)
+    # Fetch visit rows for the vendors in the current page
     visits = Visit.query.filter(
         and_(Visit.date == target_date, Visit.vendor_id.in_(vendor_ids))
     ).all()
@@ -100,10 +99,9 @@ def upsert_visit():
 
     vendor = Vendor.query.get_or_404(data["vendor_id"])
 
-    # 🔹 RESTORED PERMISSION CHECK
-    if user.role == "superviseur":
-        if vendor.supervisor_id != int(uid):
-            return jsonify({"message": "Action non autorisée"}), 403
+    # 🔹 SECURITY CHECK: Access to vendor's distributor via junction table helper
+    if user.role == "superviseur" and not user.has_distributor(vendor.distributor_id):
+        return jsonify({"message": "Action non autorisée"}), 403
 
     target_date = data["date"]
     field = data["field"]
@@ -116,14 +114,14 @@ def upsert_visit():
             date=target_date,
             vendor_id=vendor.id,
             distributor_id=vendor.distributor_id,
-            supervisor_id=uid,
+            supervisor_id=uid,  # Log who created the record
             planned_visits=0,
             actual_visits=0,
             invoice_count=0,
         )
         db.session.add(visit)
 
-    # 🔹 SUPPORT BOTH FRONTEND NAMING CONVENTIONS
+    # Support multiple frontend field naming conventions
     if field in ["planned", "prog"]:
         visit.planned_visits = val
     elif field in ["actual", "done"]:
@@ -138,27 +136,30 @@ def upsert_visit():
 def bulk_upsert_visits():
     uid = get_jwt_identity()
     user = User.query.get(uid)
-    changes = request.json  # Expects a list of dicts
+    changes = request.json
 
     if not isinstance(changes, list):
         return jsonify({"message": "Format invalide, liste attendue"}), 400
 
     processed_count = 0
     try:
-        # Group changes by (vendor_id, date) to avoid fetching same record multiple times
+        # Group changes by vendor/date to minimize database lookups
         grouped = {}
         for item in changes:
-            key = (item['vendor_id'], item['date'])
+            key = (item["vendor_id"], item["date"])
             if key not in grouped:
                 grouped[key] = []
             grouped[key].append(item)
 
         for (v_id, target_date), items in grouped.items():
             vendor = Vendor.query.get(v_id)
-            if not vendor: continue
+            if not vendor:
+                continue
 
-            # Permission check
-            if user.role == "superviseur" and vendor.supervisor_id != int(uid):
+            # 🔹 SECURITY CHECK: Verify access to vendor's distributor
+            if user.role == "superviseur" and not user.has_distributor(
+                vendor.distributor_id
+            ):
                 continue
 
             visit = Visit.query.filter_by(vendor_id=v_id, date=target_date).first()
@@ -175,16 +176,16 @@ def bulk_upsert_visits():
                 db.session.add(visit)
 
             for item in items:
-                field = item['field']
-                val = int(item.get('value', 0))
-                
+                field = item["field"]
+                val = int(item.get("value", 0))
+
                 if field in ["planned", "prog"]:
                     visit.planned_visits = val
                 elif field in ["actual", "done"]:
                     visit.actual_visits = val
                 elif field in ["invoices", "nb_factures"]:
                     visit.invoice_count = val
-            
+
             processed_count += 1
 
         db.session.commit()

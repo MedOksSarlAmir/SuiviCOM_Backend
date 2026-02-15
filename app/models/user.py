@@ -1,13 +1,25 @@
 from app.extensions import db
 from datetime import datetime
 
-
 user_wilayas = db.Table(
     "user_wilayas",
     db.Column("user_id", db.Integer, db.ForeignKey("dbo.users.id"), primary_key=True),
     db.Column(
         "wilaya_id", db.Integer, db.ForeignKey("dbo.wilayas.id"), primary_key=True
     ),
+    schema="dbo",
+)
+
+distributor_supervisors = db.Table(
+    "distributor_supervisors",
+    db.Column("user_id", db.Integer, db.ForeignKey("dbo.users.id"), primary_key=True),
+    db.Column(
+        "distributor_id",
+        db.Integer,
+        db.ForeignKey("dbo.distributors.id"),
+        primary_key=True,
+    ),
+    db.Column("assigned_at", db.DateTime, default=datetime.utcnow),
     schema="dbo",
 )
 
@@ -25,14 +37,12 @@ class User(db.Model):
     phone = db.Column(db.String(20))
     active = db.Column(db.Boolean, default=True)
 
-    # ALL THREE MUST HAVE dbo. PREFIX
     region_id = db.Column(db.Integer, db.ForeignKey("dbo.regions.id"), nullable=True)
     zone_id = db.Column(db.Integer, db.ForeignKey("dbo.zones.id"), nullable=True)
     wilaya_id = db.Column(db.Integer, db.ForeignKey("dbo.wilayas.id"), nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationship to the classes
     region = db.relationship("Region", backref="users")
     zone = db.relationship("Zone", backref="users")
 
@@ -41,6 +51,17 @@ class User(db.Model):
         secondary=user_wilayas,
         backref=db.backref("supervisors", lazy="dynamic"),
     )
+
+    supervised_distributors = db.relationship(
+        "Distributor",
+        secondary=distributor_supervisors,
+        backref=db.backref("supervisors", lazy="dynamic"),
+    )
+
+    def has_distributor(self, dist_id):
+        if self.role in ["admin", "dg", "dc"]:
+            return True
+        return any(d.id == int(dist_id) for d in self.supervised_distributors)
 
     def to_dict(self):
         ROLE_GEO_SCOPE = {
@@ -60,7 +81,10 @@ class User(db.Model):
             "first_name": self.first_name,
             "active": self.active,
             "geo_scope": ROLE_GEO_SCOPE.get(self.role, "N/A"),
+            "region_id": self.region_id,
             "region": self.region.name if self.region else None,
+            "zone_id": self.zone_id,
             "zone": self.zone.name if self.zone else None,
             "wilayas": [{"id": w.id, "name": w.name} for w in self.assigned_wilayas],
+            "distributeur_ids": [d.id for d in self.supervised_distributors],
         }

@@ -22,21 +22,17 @@ def get_current_stock():
     dist_id = request.args.get("distributor_id", type=int)
     search = request.args.get("search", "")
 
-    # 🔹 RESTORED DATA SCOPING
-    if user and user.role == "superviseur":
-        assigned_distributors = Distributor.query.filter_by(supervisor_id=uid).all()
-        assigned_ids = [d.id for d in assigned_distributors]
-
+    # 🔹 SCOPING: Use the junction relationship
+    if user.role == "superviseur":
+        assigned_ids = [d.id for d in user.supervised_distributors]
         if not assigned_ids:
             return jsonify({"data": [], "message": "Aucun distributeur assigné"}), 200
-
         if not dist_id or dist_id not in assigned_ids:
-            dist_id = assigned_ids[0]  # Default to first allowed
+            dist_id = assigned_ids[0]
 
     if not dist_id:
-        return jsonify({"data": [], "message": "Aucun distributeur sélectionné"}), 400
+        return jsonify({"data": [], "message": "Distributeur requis"}), 400
 
-    # Join with Product AND PhysicalInventory
     query = (
         db.session.query(Inventory, PhysicalInventory.quantity.label("physical_qty"))
         .join(Product, Inventory.product_id == Product.id)
@@ -52,10 +48,7 @@ def get_current_stock():
 
     if search:
         query = query.filter(
-            or_(
-                Product.name.ilike(f"%{search}%"),
-                Product.code.ilike(f"%{search}%"),
-            )
+            or_(Product.name.ilike(f"%{search}%"), Product.code.ilike(f"%{search}%"))
         )
 
     paginated = paginate(query.order_by(Product.name.asc()))
@@ -68,10 +61,10 @@ def get_current_stock():
                         "product_id": item.Inventory.product_id,
                         "product_name": item.Inventory.product.name,
                         "product_code": item.Inventory.product.code,
-                        "theoretical_qty": item.Inventory.quantity,  # Logique
+                        "theoretical_qty": item.Inventory.quantity,
                         "physical_qty": (
                             item.physical_qty if item.physical_qty is not None else 0
-                        ),  # Réel
+                        ),
                     }
                     for item in paginated["items"]
                 ],
@@ -84,11 +77,16 @@ def get_current_stock():
 
 def adjust_stock():
     uid = get_jwt_identity()
+    user = User.query.get(uid)
     data = request.json
+    dist_id = data.get("distributor_id")
+
+    # 🔹 SECURITY CHECK
+    if not user.has_distributor(dist_id):
+        return jsonify({"message": "Accès non autorisé à ce distributeur"}), 403
 
     try:
         qty = int(data["quantity"])
-        dist_id = data["distributor_id"]
         prod_id = data["product_id"]
 
         adj = StockAdjustment(
@@ -97,13 +95,10 @@ def adjust_stock():
             product_id=prod_id,
             supervisor_id=uid,
             quantity=qty,
-            note=data.get("note", "Manual adjustment"),
+            note=data.get("note", "Ajustement manuel"),
         )
         db.session.add(adj)
-
-        # Apply change
         update_stock_incremental(dist_id, prod_id, qty)
-
         db.session.commit()
         return jsonify({"message": "Ajustement enregistré"}), 201
     except Exception as e:
@@ -112,112 +107,117 @@ def adjust_stock():
 
 
 def delete_adjustment(adj_id):
+    uid = get_jwt_identity()
+    user = User.query.get(uid)
     adj = StockAdjustment.query.get_or_404(adj_id)
 
-    try:
-        update_stock_incremental(
-            adj.distributor_id,
-            adj.product_id,
-            -adj.quantity,
-        )
+    # 🔹 SECURITY CHECK
+    if not user.has_distributor(adj.distributor_id):
+        return jsonify({"message": "Action non autorisée"}), 403
 
+    try:
+        update_stock_incremental(adj.distributor_id, adj.product_id, -adj.quantity)
         db.session.delete(adj)
         db.session.commit()
         return jsonify({"message": "Ajustement supprimé"}), 200
-
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
 
 
 def get_history(dist_id, prod_id):
+    uid = get_jwt_identity()
+    user = User.query.get(uid)
+
+    # 🔹 SECURITY CHECK
+    if not user.has_distributor(dist_id):
+        return jsonify({"message": "Accès non autorisé"}), 403
+
     move_type = request.args.get("type")
     vendor_id = request.args.get("vendor_id")
     start_date = request.args.get("startDate")
     end_date = request.args.get("endDate")
 
     query = InventoryHistoryView.query.filter_by(
-        distributor_id=dist_id, 
-        product_id=prod_id
+        distributor_id=dist_id, product_id=prod_id
     )
 
     if move_type and move_type != "all":
         query = query.filter(InventoryHistoryView.type == move_type)
-    
     if vendor_id and vendor_id != "all":
         query = query.filter(InventoryHistoryView.vendor_id == int(vendor_id))
-
     if start_date:
         query = query.filter(InventoryHistoryView.created_at >= start_date)
     if end_date:
         query = query.filter(InventoryHistoryView.created_at <= f"{end_date} 23:59:59")
 
-    # Sort by created_at DESC for chronological real order
     paginated = paginate(query.order_by(InventoryHistoryView.created_at.desc()))
-
-    return jsonify({
-        "data": [
+    return (
+        jsonify(
             {
-                "id": h.ref_id,
-                "date": h.created_at.isoformat(),
-                "type": h.type,
-                "quantity": h.quantity,
-                "actor": h.actor_name,
-                "note": h.note,
+                "data": [
+                    {
+                        "id": h.ref_id,
+                        "date": h.created_at.isoformat(),
+                        "type": h.type,
+                        "quantity": h.quantity,
+                        "actor": h.actor_name,
+                        "note": h.note,
+                    }
+                    for h in paginated["items"]
+                ],
+                "total": paginated["total"],
             }
-            for h in paginated["items"]
-        ],
-        "total": paginated["total"],
-    }), 200
+        ),
+        200,
+    )
 
-
-# app/controllers/supervisor/inventory_controller.py
 
 def refresh_inventory():
     uid = get_jwt_identity()
+    user = User.query.get(uid)
     data = request.json
     dist_id = data.get("distributor_id")
 
-    if not dist_id:
-        return jsonify({"message": "ID Distributeur manquant"}), 400
-
-    # 🔹 SECURITY CHECK: Verify supervisor ownership
-    distributor = Distributor.query.filter_by(id=dist_id, supervisor_id=uid).first()
-    if not distributor:
-        return jsonify({"message": "Accès non autorisé à ce distributeur"}), 403
+    # 🔹 SECURITY CHECK
+    if not user.has_distributor(dist_id):
+        return jsonify({"message": "Action non autorisée"}), 403
 
     try:
-        # Pass the distributor_id to the scoped SP
         db.session.execute(
             text("EXEC dbo.sp_refresh_inventory @distributor_id=:d_id"),
-            {"d_id": dist_id}
+            {"d_id": dist_id},
         )
         db.session.commit()
-        return jsonify({"message": f"Inventaire de '{distributor.name}' synchronisé"}), 200
+        return jsonify({"message": "Inventaire théorique synchronisé"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
 
 
 def upsert_physical_inventory():
+    uid = get_jwt_identity()
+    user = User.query.get(uid)
     data = request.json
     dist_id = data.get("distributor_id")
-    prod_id = data.get("product_id")
-    qty = data.get("quantity")
+
+    # 🔹 SECURITY CHECK
+    if not user.has_distributor(dist_id):
+        return jsonify({"message": "Action non autorisée"}), 403
 
     try:
-        # MSSQL Upsert logic
         physical = PhysicalInventory.query.filter_by(
-            distributor_id=dist_id, product_id=prod_id
+            distributor_id=dist_id, product_id=data["product_id"]
         ).first()
         if not physical:
             physical = PhysicalInventory(
-                distributor_id=dist_id, product_id=prod_id, quantity=qty
+                distributor_id=dist_id,
+                product_id=data["product_id"],
+                quantity=data["quantity"],
             )
             db.session.add(physical)
         else:
-            physical.quantity = qty
-
+            physical.quantity = data["quantity"]
         db.session.commit()
         return jsonify({"message": "Inventaire physique enregistré"}), 200
     except Exception as e:

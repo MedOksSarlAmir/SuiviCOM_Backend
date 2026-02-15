@@ -31,4 +31,11 @@ def update_dist(id):
 @jwt_required()
 @roles_required("admin")
 def reassign():
-    return distributor_controller.bulk_reassign_distributors()
+    return distributor_controller.bulk_reassign()
+
+
+@distributor_bp.route("/supervisors", methods=["GET"])
+@jwt_required()
+@roles_required("admin")
+def list_supervisors():
+    return distributor_controller.list_supervisors()

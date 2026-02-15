@@ -5,23 +5,21 @@ from sqlalchemy import or_, and_, case
 from datetime import datetime, timedelta
 from decimal import Decimal
 from app.extensions import db
-from app.models import Sale, SaleItem, User, Product, SaleView, Vendor
+from app.models import Sale, SaleItem, User, Product, SaleView, Vendor, Distributor
 from app.utils.stock_ops import update_stock_incremental
 from app.utils.pagination import paginate
 
 
 def list_sales():
-    user_id = get_jwt_identity()
-    user = User.query.get_or_404(user_id)
+    uid = get_jwt_identity()
+    user = User.query.get_or_404(uid)
 
     query = SaleView.query
 
-    # Role Scoping
+    # 🔹 SCOPING: Filter by distributors the supervisor is assigned to (Many-to-Many)
     if user.role == "superviseur":
-        query = query.filter(SaleView.supervisor_id == user_id)
-    elif user.role in ["chef_zone", "regional"]:
-        # Future: Filter by User hierarchy IDs
-        pass
+        dist_ids = [d.id for d in user.supervised_distributors]
+        query = query.filter(SaleView.distributor_id.in_(dist_ids))
 
     # Date filters
     start_date = request.args.get("startDate")
@@ -31,7 +29,7 @@ def list_sales():
     if end_date:
         query = query.filter(SaleView.date <= datetime.fromisoformat(end_date).date())
 
-    # Search & Sorting
+    # Search
     search = request.args.get("search")
     if search:
         query = query.filter(
@@ -44,7 +42,6 @@ def list_sales():
 
     paginated = paginate(query.order_by(SaleView.date.desc(), SaleView.id.desc()))
 
-    # Build results from View (very fast)
     results = []
     for s in paginated["items"]:
         results.append(
@@ -63,8 +60,8 @@ def list_sales():
 
 
 def upsert_sale_item():
-    """Save on Blur logic"""
     uid = get_jwt_identity()
+    user = User.query.get(uid)
     data = request.json
 
     v_id = data.get("vendor_id")
@@ -74,6 +71,10 @@ def upsert_sale_item():
 
     vendor = Vendor.query.get_or_404(v_id)
 
+    # 🔹 SECURITY CHECK: Many-to-Many access verification
+    if not user.has_distributor(vendor.distributor_id):
+        return jsonify({"message": "Accès non autorisé à ce distributeur"}), 403
+
     try:
         sale = Sale.query.filter_by(vendor_id=v_id, date=target_date).first()
         if not sale:
@@ -82,7 +83,7 @@ def upsert_sale_item():
                 distributor_id=vendor.distributor_id,
                 vendor_id=v_id,
                 supervisor_id=uid,
-                status="complete",  # Default to complete for matrix entries
+                status="complete",
                 total_amount=0,
             )
             db.session.add(sale)
@@ -101,12 +102,9 @@ def upsert_sale_item():
             else:
                 item.quantity = qty
 
-        # Sync stock if sale is complete
         if sale.status == "complete":
-            delta = (
-                old_qty - qty
-            )  # If old was 10 and new is 12, delta is -2 (subtract more)
-            update_stock_incremental(vendor.distributor_id, p_id, delta)
+            # If old was 10 and new is 12, delta is -2 (subtract 2 more from inventory)
+            update_stock_incremental(vendor.distributor_id, p_id, old_qty - qty)
 
         db.session.flush()
         _recalculate_total(sale)
@@ -118,27 +116,9 @@ def upsert_sale_item():
         return jsonify({"message": str(e)}), 500
 
 
-def _recalculate_total(sale):
-    """Internal helper to refresh total amount based on vendor type pricing"""
-    total = Decimal("0.00")
-    v_type = sale.vendor.vendor_type
-
-    for item in sale.items:
-        p = item.product
-        if v_type == "gros":
-            price = p.price_wholesale
-        elif v_type == "superette":
-            price = p.price_supermarket
-        else:
-            price = p.price_retail
-
-        total += Decimal(str(price or 0)) * item.quantity
-
-    sale.total_amount = total
-
-
-
 def get_weekly_matrix():
+    uid = get_jwt_identity()
+    user = User.query.get(uid)
     start_date_str = request.args.get("start_date")
     vendor_id = request.args.get("vendor_id")
 
@@ -152,40 +132,43 @@ def get_weekly_matrix():
 
     vendor = Vendor.query.get_or_404(int(vendor_id))
 
+    # 🔹 SECURITY CHECK: Many-to-Many access verification
+    if not user.has_distributor(vendor.distributor_id):
+        return jsonify({"message": "Accès non autorisé"}), 403
+
+    # Date Logic: Find nearest Saturday
     raw_date = datetime.fromisoformat(start_date_str).date()
     weekday = raw_date.weekday()
-
-    if weekday == 5:
+    if weekday == 5:  # Saturday
         start_date = raw_date
-    elif weekday == 6:
+    elif weekday == 6:  # Sunday
         start_date = raw_date - timedelta(days=1)
     else:
         start_date = raw_date - timedelta(days=weekday + 2)
 
-    week_dates = [start_date + timedelta(days=i) for i in range(6)]
+    week_dates = [start_date + timedelta(days=i) for i in range(6)]  # Sam to Jeu
     end_date = week_dates[-1]
 
     sales = Sale.query.filter(
-        Sale.vendor_id == vendor.id,
-        Sale.date >= start_date,
-        Sale.date <= end_date
+        Sale.vendor_id == vendor.id, Sale.date >= start_date, Sale.date <= end_date
     ).all()
 
     sale_ids = [s.id for s in sales]
     status_map = {s.date.isoformat(): s.status for s in sales}
 
+    # Find products already sold in this week to prioritize them in the list
     involved_product_ids = []
     if sale_ids:
         involved_product_ids = [
-            p[0] for p in db.session.query(SaleItem.product_id)
+            p[0]
+            for p in db.session.query(SaleItem.product_id)
             .filter(SaleItem.sale_id.in_(sale_ids))
             .distinct()
             .all()
         ]
 
-    # ---------- PRODUCT QUERY ----------
+    # Base Product Query
     base_query = Product.query.filter(Product.active == True)
-
     if cat != "all":
         base_query = base_query.filter(Product.category_id == int(cat))
     if p_type != "all":
@@ -193,28 +176,26 @@ def get_weekly_matrix():
     if fmt != "all":
         base_query = base_query.filter(Product.format == fmt)
     if search:
-        like = f"%{search}%"
-        base_query = base_query.filter(or_(Product.name.ilike(like), Product.code.ilike(like)))
+        base_query = base_query.filter(
+            or_(Product.name.ilike(f"%{search}%"), Product.code.ilike(f"%{search}%"))
+        )
 
-    # ✅ COUNT WITHOUT ORDER BY (IMPORTANT FOR SQL SERVER)
-    total = base_query.order_by(None).count()
+    total = base_query.count()
 
-    # ---------- ORDERING ----------
+    # Ordering: Week products first, then Alpha
     if involved_product_ids:
         ordered_query = base_query.order_by(
-            case((Product.id.in_(involved_product_ids), 0), else_=1),
-            Product.name.asc()
+            case((Product.id.in_(involved_product_ids), 0), else_=1), Product.name.asc()
         )
     else:
         ordered_query = base_query.order_by(Product.name.asc())
 
-    # ---------- PAGINATION ----------
+    # Pagination
     page = int(request.args.get("page", 1))
     page_size = int(request.args.get("pageSize", 25))
-
     items = ordered_query.offset((page - 1) * page_size).limit(page_size).all()
 
-    # ---------- MAP QUANTITIES ----------
+    # Map quantities for the grid
     item_map = {}
     if sale_ids:
         sale_items = SaleItem.query.filter(SaleItem.sale_id.in_(sale_ids)).all()
@@ -226,6 +207,7 @@ def get_weekly_matrix():
 
     data = []
     for p in items:
+        # Determine price based on vendor type
         if vendor.vendor_type == "gros":
             price = p.price_wholesale
         elif vendor.vendor_type == "superette":
@@ -233,48 +215,71 @@ def get_weekly_matrix():
         else:
             price = p.price_retail
 
-        data.append({
-            "active": p.active,
-            "product_id": p.id,
-            "name": p.name,
-            "code": p.code,
-            "unit_price": float(price or 0),
-            "days": [item_map.get((p.id, d), 0) for d in week_dates],
-        })
+        data.append(
+            {
+                "product_id": p.id,
+                "name": p.name,
+                "code": p.code,
+                "active": p.active,
+                "price": float(price or 0),
+                "days": [item_map.get((p.id, d), 0) for d in week_dates],
+            }
+        )
 
-    return jsonify({
-        "data": data,
-        "total": total,
-        "dates": [d.isoformat() for d in week_dates],
-        "statuses": status_map,
-    }), 200
+    return (
+        jsonify(
+            {
+                "data": data,
+                "total": total,
+                "dates": [d.isoformat() for d in week_dates],
+                "statuses": status_map,
+            }
+        ),
+        200,
+    )
 
 
 def update_sale_status_by_date():
     uid = get_jwt_identity()
+    user = User.query.get(uid)
     data = request.json
     v_id = data.get("vendor_id")
     target_date = data.get("date")
     new_status = data.get("status")
-    
+
     vendor = Vendor.query.get_or_404(v_id)
+
+    # 🔹 SECURITY CHECK
+    if not user.has_distributor(vendor.distributor_id):
+        return jsonify({"message": "Action non autorisée"}), 403
 
     try:
         sale = Sale.query.filter_by(vendor_id=v_id, date=target_date).first()
         if not sale:
-            sale = Sale(date=target_date, distributor_id=vendor.distributor_id, vendor_id=v_id, supervisor_id=uid, status=new_status)
+            sale = Sale(
+                date=target_date,
+                distributor_id=vendor.distributor_id,
+                vendor_id=v_id,
+                supervisor_id=uid,
+                status=new_status,
+            )
             db.session.add(sale)
         else:
             old_status = sale.status
-            if old_status == new_status: return jsonify({"message": "Aucun changement"}), 200
+            if old_status == new_status:
+                return jsonify({"message": "Aucun changement"}), 200
 
-            # Stock Sync logic
+            # Inventory Sync logic when status flips to/from 'complete'
             if old_status != "complete" and new_status == "complete":
                 for itm in sale.items:
-                    update_stock_incremental(sale.distributor_id, itm.product_id, -itm.quantity)
+                    update_stock_incremental(
+                        sale.distributor_id, itm.product_id, -itm.quantity
+                    )
             elif old_status == "complete" and new_status != "complete":
                 for itm in sale.items:
-                    update_stock_incremental(sale.distributor_id, itm.product_id, itm.quantity)
+                    update_stock_incremental(
+                        sale.distributor_id, itm.product_id, itm.quantity
+                    )
             sale.status = new_status
 
         db.session.commit()
@@ -282,28 +287,26 @@ def update_sale_status_by_date():
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
-    
 
 
 def bulk_upsert_sale_items():
     uid = get_jwt_identity()
-    changes = request.json  # List of {vendor_id, product_id, date, quantity}
-
-    if not isinstance(changes, list):
-        return jsonify({"message": "Liste attendue"}), 400
+    user = User.query.get(uid)
+    changes = request.json
 
     try:
-        # Group by (vendor_id, date) to manage the parent Sale record
         grouped_sales = {}
         for c in changes:
-            key = (c['vendor_id'], c['date'])
+            key = (c["vendor_id"], c["date"])
             if key not in grouped_sales:
                 grouped_sales[key] = []
             grouped_sales[key].append(c)
 
         for (v_id, target_date), items in grouped_sales.items():
             vendor = Vendor.query.get(v_id)
-            if not vendor: continue
+            # 🔹 SECURITY CHECK: Skip unauthorized vendors
+            if not vendor or not user.has_distributor(vendor.distributor_id):
+                continue
 
             sale = Sale.query.filter_by(vendor_id=v_id, date=target_date).first()
             if not sale:
@@ -313,20 +316,22 @@ def bulk_upsert_sale_items():
                     vendor_id=v_id,
                     supervisor_id=uid,
                     status="complete",
-                    total_amount=0
+                    total_amount=0,
                 )
                 db.session.add(sale)
                 db.session.flush()
 
             for item_data in items:
-                p_id = item_data['product_id']
-                qty = int(item_data.get('quantity', 0))
-                
-                item = SaleItem.query.filter_by(sale_id=sale.id, product_id=p_id).first()
+                p_id = item_data["product_id"]
+                qty = int(item_data.get("quantity", 0))
+                item = SaleItem.query.filter_by(
+                    sale_id=sale.id, product_id=p_id
+                ).first()
                 old_qty = item.quantity if item else 0
 
                 if qty <= 0:
-                    if item: db.session.delete(item)
+                    if item:
+                        db.session.delete(item)
                 else:
                     if not item:
                         item = SaleItem(sale_id=sale.id, product_id=p_id, quantity=qty)
@@ -334,10 +339,8 @@ def bulk_upsert_sale_items():
                     else:
                         item.quantity = qty
 
-                # Stock Sync
                 if sale.status == "complete":
-                    delta = old_qty - qty
-                    update_stock_incremental(vendor.distributor_id, p_id, delta)
+                    update_stock_incremental(vendor.distributor_id, p_id, old_qty - qty)
 
             db.session.flush()
             _recalculate_total(sale)
@@ -347,3 +350,17 @@ def bulk_upsert_sale_items():
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
+
+
+def _recalculate_total(sale):
+    total = Decimal("0.00")
+    v_type = sale.vendor.vendor_type
+    for item in sale.items:
+        p = item.product
+        price = (
+            p.price_wholesale
+            if v_type == "gros"
+            else p.price_supermarket if v_type == "superette" else p.price_retail
+        )
+        total += Decimal(str(price or 0)) * item.quantity
+    sale.total_amount = total

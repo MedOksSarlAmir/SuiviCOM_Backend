@@ -13,10 +13,11 @@ class Vendor(db.Model):
     created_at = db.Column(db.DateTime, default=db.func.now())
 
     distributor_id = db.Column(db.Integer, db.ForeignKey("dbo.distributors.id"))
+    # We keep this for individual vendor assignment,
+    # but security will also check distributor access.
     supervisor_id = db.Column(db.Integer, db.ForeignKey("dbo.users.id"))
     active = db.Column(db.Boolean, default=True)
 
     # Relationships
     distributor = db.relationship("Distributor", backref="vendors")
     supervisor = db.relationship("User", backref="supervised_vendors")
-    

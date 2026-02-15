@@ -1,7 +1,7 @@
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from app.extensions import db
-from app.models import Vendor, Sale, Visit, User, Distributor
+from app.models import Vendor, User, Distributor
 from app.utils.pagination import paginate
 from sqlalchemy import or_
 
@@ -12,18 +12,24 @@ def list_vendors():
 
     query = Vendor.query
 
-    # Scoping: Supervisors only see their own vendors
+    # 🔹 SCOPING: Filter by distributors the supervisor is assigned to
     if user.role == "superviseur":
-        query = query.filter_by(supervisor_id=uid)
+        dist_ids = [d.id for d in user.supervised_distributors]
+        query = query.filter(Vendor.distributor_id.in_(dist_ids))
 
     # Filters
     dist_id = request.args.get("distributor_id")
     if dist_id and dist_id != "all":
+        # Additional security check: if a specific dist_id is requested,
+        # ensure supervisor has access to it.
+        if user.role == "superviseur" and int(dist_id) not in [
+            d.id for d in user.supervised_distributors
+        ]:
+            return jsonify({"message": "Accès non autorisé à ce distributeur"}), 403
         query = query.filter_by(distributor_id=dist_id)
 
-
     vendor_type = request.args.get("vendor_type")
-    if vendor_type and dist_id != "all":
+    if vendor_type and vendor_type != "all":
         query = query.filter_by(vendor_type=vendor_type)
 
     search = request.args.get("search")
@@ -65,7 +71,15 @@ def list_vendors():
 
 def create_vendor():
     uid = get_jwt_identity()
+    user = User.query.get(uid)
     data = request.json
+
+    dist_id = data.get("distributor_id")
+
+    # 🔹 SECURITY CHECK: Can this supervisor add a vendor to this distributor?
+    if user.role == "superviseur" and not user.has_distributor(dist_id):
+        return jsonify({"message": "Vous n'êtes pas assigné à ce distributeur"}), 403
+
     try:
         if Vendor.query.filter_by(code=data["code"]).first():
             return jsonify({"message": "Ce code de vendeur existe déjà"}), 400
@@ -75,33 +89,49 @@ def create_vendor():
             first_name=data["first_name"],
             last_name=data["last_name"],
             vendor_type=data.get("type", "detail"),
-            distributor_id=data["distributor_id"],
-            supervisor_id=uid,
+            distributor_id=dist_id,
+            supervisor_id=uid,  # Keep track of who created it
             active=True,
         )
         db.session.add(new_vendor)
         db.session.commit()
-        return jsonify({"message": "Vendeur créé avec succès", "id": new_vendor.id}), 201
+        return (
+            jsonify({"message": "Vendeur créé avec succès", "id": new_vendor.id}),
+            201,
+        )
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": str(e)}), 500
 
 
 def update_vendor(vendor_id):
+    uid = get_jwt_identity()
+    user = User.query.get(uid)
     vendor = Vendor.query.get_or_404(vendor_id)
     data = request.json
+
+    # 🔹 SECURITY CHECK: Verify access to the vendor's distributor
+    if user.role == "superviseur" and not user.has_distributor(vendor.distributor_id):
+        return jsonify({"message": "Action non autorisée"}), 403
+
     vendor.first_name = data.get("first_name", vendor.first_name)
     vendor.last_name = data.get("last_name", vendor.last_name)
     vendor.vendor_type = data.get("type", vendor.vendor_type)
     vendor.active = data.get("active", vendor.active)
+
     db.session.commit()
     return jsonify({"message": "Vendeur mis à jour avec succès"}), 200
 
 
 def delete_vendor(vendor_id):
+    uid = get_jwt_identity()
+    user = User.query.get(uid)
     vendor = Vendor.query.get_or_404(vendor_id)
 
-    # Safety Check: Don't delete if they have sales or visits
+    # 🔹 SECURITY CHECK
+    if user.role == "superviseur" and not user.has_distributor(vendor.distributor_id):
+        return jsonify({"message": "Action non autorisée"}), 403
+
     if vendor.sales or vendor.visits_activity:
         return (
             jsonify(

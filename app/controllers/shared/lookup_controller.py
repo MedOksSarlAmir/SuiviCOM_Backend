@@ -39,24 +39,40 @@ def get_admin_metadata():
 
 
 def get_distributors_scoped():
-    """Restored from old supervisor controller: Returns distributors assigned to the user"""
+    """
+    FIXED: Uses the Many-to-Many relationship instead of a missing column.
+    Returns distributors assigned to the user.
+    """
     uid = get_jwt_identity()
     user = User.query.get(uid)
-    query = DistributorView.query.filter_by(active=True)
 
+    if not user:
+        return jsonify({"message": "Utilisateur non trouvé"}), 404
+
+    # 🔹 If Supervisor: Get from junction table
     if user.role == "superviseur":
-        query = query.filter_by(supervisor_id=uid)
+        dists = [d for d in user.supervised_distributors if d.active]
+    else:
+        # 🔹 Admin/DG/DC see all active distributors
+        dists = Distributor.query.filter_by(active=True).all()
 
     return (
         jsonify(
-            [{"id": d.id, "name": d.name, "wilaya": d.wilaya_name} for d in query.all()]
+            [
+                {
+                    "id": d.id,
+                    "name": d.name,
+                    "wilaya": d.wilaya.name if d.wilaya else "N/A",
+                }
+                for d in dists
+            ]
         ),
         200,
     )
 
 
 def get_products_lookup():
-    """Restored from old supervisor controller: Returns products with all price types"""
+    """Returns products with all price types"""
     prods = Product.query.filter_by(active=True).all()
     return (
         jsonify(
@@ -64,7 +80,7 @@ def get_products_lookup():
                 {
                     "id": p.id,
                     "code": p.code,
-                    "name": p.name,  # mapping from designation
+                    "name": p.name,
                     "price_factory": float(p.price_factory or 0),
                     "price_wholesale": float(p.price_wholesale or 0),
                     "price_retail": float(p.price_retail or 0),
@@ -79,7 +95,7 @@ def get_products_lookup():
 
 
 def get_vendors_by_distributor(dist_id):
-    """Restored logic: Fetches vendors for a specific distributor"""
+    """Fetches vendors for a specific distributor"""
     distributor = Distributor.query.get_or_404(dist_id)
     vendors = sorted(distributor.vendors, key=lambda v: not v.active)
     return (
@@ -100,7 +116,7 @@ def get_vendors_by_distributor(dist_id):
 
 
 def get_categories_with_formats():
-    """Restored complex logic: Hierarchical list of categories and their available formats"""
+    """Hierarchical list of categories and their available formats"""
     query_data = (
         db.session.query(ProductCategory.id, ProductCategory.name, Product.format)
         .join(Product, Product.category_id == ProductCategory.id)
